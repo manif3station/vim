@@ -1,0 +1,300 @@
+if exists('g:loaded_vim_tools_ai_tools')
+  finish
+endif
+let g:loaded_vim_tools_ai_tools = 1
+
+let s:provider = get(g:, 'vim_tools_ai_provider', 'copilot')
+let s:cli = exepath(s:provider)
+if empty(s:cli)
+  let s:cli = s:provider
+endif
+let s:request = {}
+let s:job = 0
+let s:ghost = ''
+let s:auto_timer = -1
+highlight default link VimToolsAICompletion Comment
+
+function! s:StopAutoTimer() abort
+  if s:auto_timer != -1
+    call timer_stop(s:auto_timer)
+    let s:auto_timer = -1
+  endif
+endfunction
+
+function! s:ClearGhost() abort
+  let s:ghost = ''
+  if exists('*prop_remove')
+    silent! call prop_remove({'type': 'VimToolsAICompletion', 'all': 1}, 1, line('$'))
+  endif
+endfunction
+
+function! s:ScheduleCompletion() abort
+  if !exists('*timer_start') || &buftype !=# '' || empty(&filetype)
+    return
+  endif
+  if s:auto_timer != -1
+    call timer_stop(s:auto_timer)
+  endif
+  let s:auto_timer = timer_start(1200, function('s:AutoComplete'))
+endfunction
+
+function! s:AutoComplete(timer) abort
+  let s:auto_timer = -1
+  if s:job > 0 && job_status(s:job) ==# 'run'
+    let s:auto_timer = timer_start(500, function('s:AutoComplete'))
+  elseif mode() =~# '^i'
+    call VimToolsAIComplete()
+  endif
+endfunction
+
+function! s:ShowSuggestion(text) abort
+  call s:ClearGhost()
+  if a:text !~# "\n" && exists('*prop_add') && exists('*prop_type_add')
+    try
+      if empty(prop_type_get('VimToolsAICompletion'))
+        call prop_type_add('VimToolsAICompletion', {'highlight': 'VimToolsAICompletion'})
+      endif
+      let s:ghost = a:text
+      call prop_add(line('.'), col('.'), {'type': 'VimToolsAICompletion', 'text': a:text})
+      return
+    catch
+      call s:ClearGhost()
+    endtry
+  endif
+  call complete(s:request.column, [{'word': a:text, 'menu': '[AI: ' . s:provider . ']'}])
+endfunction
+
+function! s:AICommand(prompt, output_path) abort
+  if s:provider ==# 'copilot'
+    return [s:cli, '-p', a:prompt, '--silent',
+          \ '--deny-tool=shell', '--deny-tool=write', '--deny-tool=read',
+          \ '--deny-tool=create', '--deny-tool=edit', '--deny-tool=apply_patch',
+          \ '--deny-tool=grep', '--deny-tool=glob', '--deny-tool=web_fetch',
+          \ '--deny-tool=task', '--deny-tool=skill']
+  elseif s:provider ==# 'codex'
+    return [s:cli, 'exec', '--ephemeral', '--sandbox', 'read-only',
+          \ '--skip-git-repo-check', '--output-last-message', a:output_path, a:prompt]
+  endif
+  return [s:cli, '--print', '--output-format', 'text', '--permission-mode', 'plan',
+        \ '--no-session-persistence', a:prompt]
+endfunction
+
+function! s:AIOut(channel, message) abort
+  if !empty(a:message)
+    let s:request.output .= a:message . "\n"
+  endif
+endfunction
+
+function! s:AIErr(channel, message) abort
+  if !empty(a:message)
+    let s:request.error .= a:message . "\n"
+  endif
+endfunction
+
+function! s:CleanResponse(text) abort
+  let l:text = substitute(a:text, "\r", '', 'g')
+  let l:text = substitute(l:text, '^\_s*\|\_s*$', '', 'g')
+  if l:text =~# '^```'
+    let l:text = substitute(l:text, '^```[^\n]*\n', '', '')
+    let l:text = substitute(l:text, '\n```\s*$', '', '')
+  endif
+  return l:text
+endfunction
+
+function! s:AIExit(job, status) abort
+  if s:provider ==# 'codex' && !empty(get(s:request, 'output_path', ''))
+    if filereadable(s:request.output_path)
+      let s:request.output = join(readfile(s:request.output_path, 'b'), "\n")
+    endif
+    call delete(s:request.output_path)
+  endif
+  let l:response = s:CleanResponse(s:request.output)
+  if a:status != 0 || empty(l:response)
+    let l:message = empty(s:request.error)
+          \ ? printf('AI CLI exited with status %d and returned no completion.', a:status)
+          \ : substitute(s:request.error, '\n\+$', '', '')
+    echohl ErrorMsg
+    echom 'AI: ' . l:message
+    echohl None
+    let s:job = 0
+    return
+  endif
+
+  if get(s:request, 'kind', '') ==# 'complete'
+    if bufnr('%') == s:request.buffer && line('.') == s:request.line
+          \ && strpart(getline('.'), 0, col('.') - 1) ==# s:request.prefix
+          \ && mode() =~# '^i'
+      try
+        call s:StopAutoTimer()
+        call s:ShowSuggestion(l:response)
+      catch
+        echom 'AI suggestion is ready; use :AIAccept to insert it.'
+        let s:request.pending = l:response
+      endtry
+    else
+      if bufnr('%') == s:request.buffer && line('.') == s:request.line && mode() =~# '^i'
+        if exists('*timer_start')
+          call s:StopAutoTimer()
+          let s:auto_timer = timer_start(400, function('s:AutoComplete'))
+        endif
+      else
+        let s:request.pending = l:response
+        echom 'AI suggestion is ready; use :AIAccept to insert it.'
+      endif
+    endif
+  elseif bufnr('%') == s:request.buffer && getbufvar(s:request.buffer, 'changedtick') == s:request.changedtick
+    call setbufline(s:request.buffer, s:request.startline, split(l:response, "\n", 1))
+    if s:request.endline > s:request.startline
+      call deletebufline(s:request.buffer, s:request.startline + len(split(l:response, "\n", 1)), s:request.endline)
+    endif
+    echom 'AI response inserted with ' . s:provider . '.'
+  else
+    let s:request.pending = l:response
+    echom 'AI response is ready; the buffer changed, so it was not inserted.'
+  endif
+  let s:job = 0
+endfunction
+
+function! s:Start(prompt, kind) abort
+  if !executable(s:cli)
+    echoerr 'AI CLI not found: ' . s:provider . '. Install and authenticate it, then rerun the Vim setup.'
+    return
+  endif
+  if s:job > 0 && job_status(s:job) ==# 'run'
+    echoerr 'An AI request is already running.'
+    return
+  endif
+
+  let s:request = {
+        \ 'kind': a:kind, 'output': '', 'error': '', 'buffer': bufnr('%'),
+        \ 'line': line('.'), 'column': col('.'), 'prefix': strpart(getline('.'), 0, col('.') - 1),
+        \ 'changedtick': b:changedtick,
+        \ 'startline': get(s:, 'generate_start', line('.')),
+        \ 'endline': get(s:, 'generate_end', line('.'))
+        \ }
+  let l:argv = []
+  if s:provider ==# 'codex'
+    let s:request.output_path = tempname()
+    call writefile([], s:request.output_path)
+    let l:argv = s:AICommand(a:prompt, s:request.output_path)
+  else
+    let l:argv = s:AICommand(a:prompt, '')
+  endif
+  let l:options = {
+        \ 'out_cb': function('s:AIOut'), 'err_cb': function('s:AIErr'),
+        \ 'exit_cb': function('s:AIExit'), 'out_mode': 'nl', 'err_mode': 'nl',
+        \ 'cwd': fnamemodify(expand('%:p'), ':h')
+        \ }
+  let s:job = job_start(l:argv, l:options)
+  if job_status(s:job) !=# 'run'
+    if !empty(get(s:request, 'output_path', ''))
+      call delete(s:request.output_path)
+    endif
+    let s:job = 0
+    echoerr 'Could not start ' . s:provider . ' CLI.'
+    return
+  endif
+  echom 'AI completion requested from ' . s:provider . '.'
+endfunction
+
+function! VimToolsAIComplete() abort
+  call s:StopAutoTimer()
+  if !has('job') || !has('channel')
+    echoerr 'AI completion requires Vim +job and +channel.'
+    return
+  endif
+  let l:before = getline(max([1, line('.') - 80]), line('.') - 1)
+  let l:current = getline('.')
+  let l:prefix = strpart(l:current, 0, col('.') - 1)
+  let l:suffix = strpart(l:current, col('.') - 1)
+  let l:after = getline(line('.') + 1, min([line('$'), line('.') + 20]))
+  let l:prompt = 'Complete the code at the cursor. Return only the text to insert, with no markdown fences or explanation. Keep the completion concise and syntactically consistent. Filetype: ' . &filetype . "\n"
+        \ . "Context before cursor:\n" . join(l:before, "\n") . "\n"
+        \ . l:prefix . "<CURSOR>" . l:suffix . "\n"
+        \ . join(l:after, "\n")
+  call s:Start(l:prompt, 'complete')
+endfunction
+
+function! VimToolsAIGenerate(startline, endline, instruction) abort
+  if !has('job') || !has('channel')
+    echoerr 'AI generation requires Vim +job and +channel.'
+    return
+  endif
+  let s:generate_start = a:startline
+  let s:generate_end = a:endline
+  let l:source = join(getline(a:startline, a:endline), "\n")
+  let l:instruction = empty(a:instruction) ? input('AI instruction: ') : a:instruction
+  if empty(l:instruction)
+    return
+  endif
+  let l:prompt = 'Apply this instruction to the supplied source and return only the complete replacement source text. Do not use markdown fences or explanations. Filetype: ' . &filetype . "\nInstruction: " . l:instruction . "\nSource:\n" . l:source
+  call s:Start(l:prompt, 'generate')
+endfunction
+
+function! VimToolsAIStart(instruction) abort
+  let l:instruction = empty(a:instruction) ? input('Ask ' . s:provider . ': ') : a:instruction
+  if empty(l:instruction)
+    return
+  endif
+  if !executable(s:cli)
+    echoerr 'AI CLI not found: ' . s:provider . '. Install and authenticate it, then rerun the Vim setup.'
+    return
+  endif
+  let l:context = 'Opened from Vim at ' . expand('%:p') . ':' . line('.') . ' (' . &filetype . '). User request: ' . l:instruction
+  if s:provider ==# 'copilot'
+    let l:argv = [s:cli, '--interactive', l:context]
+  elseif s:provider ==# 'codex'
+    let l:argv = [s:cli, l:context]
+  else
+    let l:argv = [s:cli, l:context]
+  endif
+  try
+    call term_start(l:argv, {'cwd': fnamemodify(expand('%:p'), ':h'), 'term_name': 'AI: ' . s:provider})
+  catch
+    echoerr 'Could not open AI assistant terminal: ' . v:exception
+  endtry
+endfunction
+
+function! VimToolsAIAccept() abort
+  let l:text = get(s:request, 'pending', '')
+  if empty(l:text)
+    echoerr 'No pending AI response.'
+    return
+  endif
+  let l:line = getline('.')
+  let l:prefix = strpart(l:line, 0, col('.') - 1)
+  let l:suffix = strpart(l:line, col('.') - 1)
+  let l:parts = split(l:text, "\n", 1)
+  if len(l:parts) == 1
+    call setline('.', l:prefix . l:parts[0] . l:suffix)
+  else
+    let l:parts[0] = l:prefix . l:parts[0]
+    let l:parts[-1] .= l:suffix
+    call setline('.', l:parts[0])
+    call append(line('.'), l:parts[1:])
+  endif
+  let s:request.pending = ''
+endfunction
+
+function! VimToolsAIAcceptGhost() abort
+  if !empty(s:ghost)
+    let l:text = s:ghost
+    call s:ClearGhost()
+    return l:text
+  endif
+  return "\<C-y>"
+endfunction
+
+command! AIComplete call VimToolsAIComplete()
+command! -range -nargs=* AIGenerate call VimToolsAIGenerate(<line1>, <line2>, <q-args>)
+command! -nargs=* AIAssistant call VimToolsAIStart(<q-args>)
+command! AIAccept call VimToolsAIAccept()
+command! AIDismiss call s:ClearGhost()
+inoremap <silent> <C-x><C-a> <C-o>:call VimToolsAIComplete()<CR>
+inoremap <silent><expr> <C-y> VimToolsAIAcceptGhost()
+
+augroup vim_tools_ai_completion
+  autocmd!
+  autocmd TextChangedI * call <SID>ClearGhost() | call <SID>ScheduleCompletion()
+  autocmd CursorMovedI,InsertLeave,BufLeave * call <SID>ClearGhost()
+augroup END

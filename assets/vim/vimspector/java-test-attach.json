@@ -1,0 +1,25 @@
+{
+  "adapters": {
+    "coc-java-debug": {
+      "port": "${AdapterPort}"
+    }
+  },
+  "configurations": {
+    "Java Test Attach": {
+      "default": true,
+      "adapter": "coc-java-debug",
+      "filetypes": ["java"],
+      "configuration": {
+        "request": "attach",
+        "host": "127.0.0.1",
+        "port": "5005"
+      },
+      "breakpoints": {
+        "exception": {
+          "caught": "N",
+          "uncaught": "N"
+        }
+      }
+    }
+  }
+}
