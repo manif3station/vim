@@ -148,6 +148,17 @@ let g:coc_user_config = extend(get(g:, 'coc_user_config', {}), {'languageserver'
 if type(get(g:coc_user_config, 'languageserver', {})) isnot v:t_dict
   let g:coc_user_config.languageserver = {}
 endif
+if has_key(g:coc_user_config.languageserver, 'perlnavigator')
+  call remove(g:coc_user_config.languageserver, 'perlnavigator')
+endif
+if has_key(g:coc_user_config.languageserver, 'perllanguageserver')
+  call remove(g:coc_user_config.languageserver, 'perllanguageserver')
+endif
+let g:vim_tools_perllanguageserver_available = 0
+if executable('perl')
+  call system('perl -MPerl::LanguageServer -e 1 2>/dev/null')
+  let g:vim_tools_perllanguageserver_available = v:shell_error == 0
+endif
 if g:vim_tools_perl_completion
   let g:coc_user_config.languageserver['perlnavigator'] = {
         \ 'command': g:vim_tools_perlnavigator_executable,
@@ -156,7 +167,7 @@ if g:vim_tools_perl_completion
         \ 'rootPatterns': ['cpanfile', 'Makefile.PL', 'Build.PL', 'dist.ini', '.git'],
         \ 'settings': {'perlnavigator': {'perlPath': 'perl', 'enableWarnings': v:true}}
         \ }
-elseif executable('perl') && system('perl -MPerl::LanguageServer -e 1 2>/dev/null') == 0
+elseif g:vim_tools_perllanguageserver_available
   let g:coc_user_config.languageserver['perllanguageserver'] = {
         \ 'command': 'perl',
         \ 'args': ['-MPerl::LanguageServer', '-ePerl::LanguageServer::run'],
@@ -164,6 +175,7 @@ elseif executable('perl') && system('perl -MPerl::LanguageServer -e 1 2>/dev/nul
         \ 'rootPatterns': ['Makefile.PL', 'Build.PL', 'dist.ini', '.git']
         \ }
 endif
+unlet g:vim_tools_perllanguageserver_available
 unlet g:vim_tools_perlnavigator_local
 VIM
     $conf .= "let g:ale_completion_enabled = 1\nlet g:ale_completion_autoimport = 1\n";

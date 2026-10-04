@@ -81,7 +81,7 @@ Space is the leader key.
 | Key/command | Action |
 | --- | --- |
 | `gd`, `gr`, `K` | Java definition, references, hover documentation |
-| `gt`, `gT` | Java class definition under the cursor; otherwise next/previous tab |
+| `gt`, `gT` | Next/previous tab (Vim defaults) |
 | `gf`, `<C-w>gf` | Java definition or Perl module; open in current buffer/new tab |
 | `<leader>rn`, `<leader>ca`, `<leader>oi` | Rename, code action, organize imports |
 | `<leader>e` | Toggle NERDTree |

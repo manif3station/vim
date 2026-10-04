@@ -19,8 +19,7 @@ like($vimrc, qr/clipboard=unnamedplus,autoselect/, 'mouse and Visual selections 
 open my $navigation_asset, '<', File::Spec->catfile('assets', 'vim', 'after', 'plugin', 'java-tools.vim') or die $!;
 my $navigation = do { local $/; <$navigation_asset> };
 close $navigation_asset;
-like($navigation, qr/nnoremap <silent> gt :call VimToolsJavaGotoOrTab\(1\)/, 'gt resolves Java classes and retains tab navigation');
-like($navigation, qr/nnoremap <silent> gT :call VimToolsJavaGotoOrTab\(-1\)/, 'gT resolves Java classes and retains tab navigation');
+unlike($navigation, qr/nnoremap <silent> g[tT] /, 'gt and gT keep Vim default tab navigation');
 like($navigation, qr/function! s:JavaProjectSource\(class_name\)/, 'Java navigation searches project source roots');
 like($navigation, qr/function! s:JavaMavenSource\(class_name\)/, 'Java navigation searches Maven source JARs');
 like($navigation, qr/return 'zipfile:\/\/' \. l:jar \. '::' \. l:relative/, 'Maven sources open through Vim ZIP support');
@@ -35,6 +34,10 @@ like($vimrc, qr/autocmd FileType perl call s:ConfigurePerlLintOptions\(\)/, 'Per
 like($vimrc, qr{/home/test/\.vim/tools/perlnavigator/node_modules/\.bin/perlnavigator}, 'local PerlNavigator install path is generated without wildcard expansion');
 like($vimrc, qr/coc_user_config\.languageserver\['perlnavigator'\]/, 'PerlNavigator is configured as a Coc language server');
 like($vimrc, qr/let g:coc_user_config\.languageserver\['perllanguageserver'\]/, 'Perl::LanguageServer remains a navigation fallback');
+like($vimrc, qr/call remove\(g:coc_user_config\.languageserver, 'perlnavigator'\)/, 'stale PerlNavigator entries are cleared before server selection');
+like($vimrc, qr/call remove\(g:coc_user_config\.languageserver, 'perllanguageserver'\)/, 'stale Perl::LanguageServer entries are cleared before server selection');
+like($vimrc, qr/call system\('perl -MPerl::LanguageServer -e 1 2>\/dev\/null'\)/, 'Perl::LanguageServer availability is probed at Vim startup');
+like($vimrc, qr/let g:vim_tools_perllanguageserver_available = v:shell_error == 0/, 'Perl::LanguageServer fallback checks the process exit status');
 unlike($vimrc, qr/ale_linters\.perl \+= \['languageserver'\]/, 'Perl LSP diagnostics do not run twice through ALE and Coc');
 like($vimrc, qr/vim_tools_perl_completion/, 'Perl completion uses Coc only when PerlNavigator is available');
 like($vimrc, qr/coc#refresh\(\).*C-n/, 'completion uses Coc for Java with Vim keyword fallback');
