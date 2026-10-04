@@ -46,7 +46,7 @@ endfunction
 function! s:AutoComplete(timer) abort
   let s:auto_timer = -1
   if s:JobRunning()
-    let s:auto_timer = timer_start(500, function('s:AutoComplete'))
+    return
   elseif mode() =~# '^i'
     call VimToolsAIComplete()
   endif

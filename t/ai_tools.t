@@ -103,9 +103,12 @@ PERL
     print {$vimscript} "call bufload(g:open_buffer)\ncall setbufline(g:open_buffer, 1, ['OPEN_BUFFER_CONTEXT_MARKER'])\n";
     print {$vimscript} "call VimToolsAIComplete()\nlet v:errmsg = ''\ncall VimToolsAIComplete()\n";
     print {$vimscript} "let g:auto_fn = matchstr(execute('function /AutoComplete'), '<SNR>\\d\\+_AutoComplete')\n";
-    print {$vimscript} "execute 'call ' . g:auto_fn . '(0)'\nsleep 1500m\ncall VimToolsAIAccept()\n";
+    print {$vimscript} "let g:timers_before = len(timer_info())\n";
+    print {$vimscript} "execute 'call ' . g:auto_fn . '(0)'\nlet g:timers_after = len(timer_info())\n";
+    print {$vimscript} "sleep 1500m\ncall VimToolsAIAccept()\n";
     print {$vimscript} "call writefile([getline(102)], '$result')\n";
     print {$vimscript} "call writefile([v:errmsg], '$tmp/$provider-errmsg.txt')\n";
+    print {$vimscript} "call writefile([string(g:timers_before), string(g:timers_after)], '$tmp/$provider-timers.txt')\n";
     print {$vimscript} "if has('patch-9.2.0000')\n";
     print {$vimscript} "  let g:show_fn = matchstr(execute('function /ShowSuggestion'), '<SNR>\\d\\+_ShowSuggestion')\n";
     print {$vimscript} "  execute 'call ' . g:show_fn . '(' . string('inline suggestion') . ')'\n";
@@ -150,6 +153,11 @@ PERL
     my $vim_error = do { local $/; <$errmsg_fh> // '' };
     close $errmsg_fh;
     is($vim_error, "\n", "$provider timer handles a running Vim Job without errors");
+    open my $timers_fh, '<', "$tmp/$provider-timers.txt" or die $!;
+    my @timers = <$timers_fh>;
+    close $timers_fh;
+    chomp @timers;
+    is_deeply(\@timers, [0, 0], "$provider auto-completion does not poll while an AI request is running");
     open my $cwd_fh, '<', $cwd_capture or die "No CLI working directory from $provider: $!";
     my $cwd_context = do { local $/; <$cwd_fh> // '' };
     close $cwd_fh;
