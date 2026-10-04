@@ -166,7 +166,7 @@ function! s:Start(prompt, kind) abort
     return
   endif
   if s:JobRunning()
-    echoerr 'An AI request is already running.'
+    echom 'An AI request is already running; duplicate request ignored.'
     return
   endif
 

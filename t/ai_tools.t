@@ -56,6 +56,7 @@ for my $index (0 .. $#ARGV - 1) {
 open my $capture, '>>', $ENV{VIM_AI_TEST_PROMPT} or die $!;
 print {$capture} "\n<<<VIM_AI_TEST_REQUEST>>>\n", defined($prompt) ? $prompt : '';
 close $capture;
+select undef, undef, undef, 0.2;
 open my $cwd_capture, '>', $ENV{VIM_AI_TEST_CWD} or die $!;
 print {$cwd_capture} getcwd(), "\n";
 if (open my $directory, '<', 'directory-context.txt') {
@@ -100,7 +101,7 @@ PERL
     print {$vimscript} "call cursor(102, 1)\n";
     print {$vimscript} "let g:open_buffer = bufadd(" . vim_quote(File::Spec->catfile($workspace, 'opened.pl')) . ")\n";
     print {$vimscript} "call bufload(g:open_buffer)\ncall setbufline(g:open_buffer, 1, ['OPEN_BUFFER_CONTEXT_MARKER'])\n";
-    print {$vimscript} "call VimToolsAIComplete()\nlet v:errmsg = ''\n";
+    print {$vimscript} "call VimToolsAIComplete()\nlet v:errmsg = ''\ncall VimToolsAIComplete()\n";
     print {$vimscript} "let g:auto_fn = matchstr(execute('function /AutoComplete'), '<SNR>\\d\\+_AutoComplete')\n";
     print {$vimscript} "execute 'call ' . g:auto_fn . '(0)'\nsleep 1500m\ncall VimToolsAIAccept()\n";
     print {$vimscript} "call writefile([getline(102)], '$result')\n";
