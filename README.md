@@ -110,23 +110,26 @@ VIM_AI_WITH=copilot
 ```
 
 After a 1.2 second pause while typing in a filetype buffer, Vim requests an
-automatic completion. Press `<C-x><C-a>` to request one immediately. Single-line
-results appear as inline virtual text when Vim supports virtual text, otherwise
-Vim shows a completion popup. Press `<C-y>` to accept an inline suggestion; use
-`:AIDismiss` to clear it. `:AIComplete` makes the same request from Normal mode.
+automatic completion. If you keep typing while a request is running, Vim asks
+again at the latest cursor position when that request finishes. Suggestions
+appear inline as Vim text properties on supported Vim versions; older versions
+use the completion popup. Press `<Tab>` to accept an AI suggestion (existing
+Tab completion remains the fallback), or `<C-y>` to accept it directly. Use
+`:AIDismiss` to clear it. Press `<C-x><C-a>` to request one immediately, or run
+`:AIComplete` from Normal mode.
 `:AIGenerate instruction` asks the selected CLI to replace
 the current line; run it over a Visual selection to replace those lines.
 `:AIAssistant [prompt]` opens the selected interactive CLI in a Vim terminal at
 the current file's directory.
 
 Completion prompts include the full in-memory current buffer, the cursor
-position, and all other loaded file buffers, including unsaved edits. The
-selected CLI runs from Vim's current working directory and can inspect relevant
-project files for additional context. Copilot read/search tools remain enabled;
-write and shell tools are disabled. Codex uses its read-only sandbox and Claude
-uses plan mode. Generation requests include the selected source text. Vim
-inserts generated text; the terminal assistant follows the selected CLI's
-regular permissions and approval settings.
+position, and up to three small open project buffers, including unsaved edits.
+Buffers outside Vim's working directory are excluded. The selected CLI runs
+from Vim's current working directory. Copilot write and shell tools are
+disabled; Codex uses its read-only sandbox and Claude uses plan mode. Generation
+requests include the selected source text. Vim inserts generated text; the
+terminal assistant follows the selected CLI's regular permissions and approval
+settings.
 
 Java tests use the nearest Maven module and run `mvn -Dtest=Class[#method] test`
 (or that module's `mvnw`). The helper reads the project's Java version from the

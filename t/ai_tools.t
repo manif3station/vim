@@ -21,6 +21,10 @@ my $directory_file = File::Spec->catfile($workspace, 'directory-context.txt');
 open my $directory_fh, '>', $directory_file or die "Cannot create workspace context file: $!";
 print {$directory_fh} "DIRECTORY_CONTEXT_MARKER\n";
 close $directory_fh;
+my $external_file = File::Spec->catfile($tmp, 'external.pl');
+open my $external_fh, '>', $external_file or die "Cannot create external buffer fixture: $!";
+print {$external_fh} "EXTERNAL_BUFFER_MARKER\n";
+close $external_fh;
 my $plugin = abs_path(File::Spec->catfile('assets', 'vim', 'after', 'plugin', 'ai-tools.vim'));
 my %expected = (
     copilot => 'copilot generated text',
@@ -101,6 +105,8 @@ PERL
     print {$vimscript} "call cursor(102, 1)\n";
     print {$vimscript} "let g:open_buffer = bufadd(" . vim_quote(File::Spec->catfile($workspace, 'opened.pl')) . ")\n";
     print {$vimscript} "call bufload(g:open_buffer)\ncall setbufline(g:open_buffer, 1, ['OPEN_BUFFER_CONTEXT_MARKER'])\n";
+    print {$vimscript} "let g:external_buffer = bufadd(" . vim_quote($external_file) . ")\n";
+    print {$vimscript} "call bufload(g:external_buffer)\ncall setbufline(g:external_buffer, 1, ['EXTERNAL_BUFFER_MARKER'])\n";
     print {$vimscript} "call VimToolsAIComplete()\nlet v:errmsg = ''\ncall VimToolsAIComplete()\n";
     print {$vimscript} "let g:auto_fn = matchstr(execute('function /AutoComplete'), '<SNR>\\d\\+_AutoComplete')\n";
     print {$vimscript} "let g:timers_before = len(timer_info())\n";
@@ -147,8 +153,9 @@ PERL
     like($prompt, qr/CURRENT_FILE_CONTEXT_MARKER/, "$provider receives the full current file");
     like($prompt, qr/<<<CURSOR>>>/, "$provider receives the exact cursor position");
     like($prompt, qr/OPEN_BUFFER_CONTEXT_MARKER/, "$provider receives other open file buffers");
+    unlike($prompt, qr/EXTERNAL_BUFFER_MARKER/, "$provider skips buffers outside the workspace");
     like($prompt, qr/Workspace directory: \Q$workspace\E/, "$provider is told the Vim working directory");
-    like($prompt, qr/Inspect relevant files and project instructions in the workspace using read-only file tools/, "$provider is instructed to inspect workspace context read-only");
+    like($prompt, qr/Do not call tools, run commands, or modify files/, "$provider receives a direct, context-only completion prompt");
     like($prompt, qr/CURRENT_FILE_CONTEXT_MARKER/, "$provider receives file context beyond the former context window");
     my $request_count = () = $prompt =~ /<<<VIM_AI_TEST_REQUEST>>>/g;
     is($request_count, 2, "$provider receives generation and completion requests");

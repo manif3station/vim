@@ -12,6 +12,9 @@ let s:request = {}
 let s:job = 0
 let s:ghost = ''
 let s:auto_timer = -1
+let s:auto_rerun = 0
+let s:accepted_ghost = ''
+let s:tab_fallback = get(s:, 'tab_fallback', "\<Tab>")
 highlight default link VimToolsAICompletion Comment
 
 function! s:JobRunning() abort
@@ -29,7 +32,7 @@ function! s:ClearGhost() abort
   let s:ghost = ''
   if exists('*prop_remove') && exists('*prop_type_get')
         \ && !empty(prop_type_get('VimToolsAICompletion'))
-    silent! call prop_remove({'type': 'VimToolsAICompletion', 'all': 1}, 1, line('$'))
+    silent! call prop_remove({'type': 'VimToolsAICompletion', 'all': 1})
   endif
 endfunction
 
@@ -46,21 +49,32 @@ endfunction
 function! s:AutoComplete(timer) abort
   let s:auto_timer = -1
   if s:JobRunning()
+    let s:auto_rerun = 1
     return
   elseif mode() =~# '^i'
-    call VimToolsAIComplete()
+    call s:StartCompletion('auto_complete')
   endif
 endfunction
 
 function! s:ShowSuggestion(text) abort
   call s:ClearGhost()
-  if a:text !~# "\n" && exists('*prop_add') && exists('*prop_type_add')
+  if exists('*prop_add') && exists('*prop_type_add') && has('patch-9.0.0185')
     try
       if empty(prop_type_get('VimToolsAICompletion'))
         call prop_type_add('VimToolsAICompletion', {'highlight': 'VimToolsAICompletion'})
       endif
       let s:ghost = a:text
-      call prop_add(line('.'), col('.'), {'type': 'VimToolsAICompletion', 'text': a:text})
+      let l:lines = split(a:text, "\n", 1)
+      if !empty(l:lines) && empty(l:lines[-1])
+        call remove(l:lines, -1)
+      endif
+      if empty(l:lines)
+        return
+      endif
+      call prop_add(line('.'), col('.'), {'type': 'VimToolsAICompletion', 'text': l:lines[0]})
+      for l:line in l:lines[1:]
+        call prop_add(line('.'), 0, {'type': 'VimToolsAICompletion', 'text_align': 'below', 'text': l:line})
+      endfor
       return
     catch
       call s:ClearGhost()
@@ -122,13 +136,21 @@ function! s:AIExit(job, status) abort
     echom 'AI: ' . l:message
     echohl None
     let s:job = 0
+    if s:auto_rerun
+      let s:auto_rerun = 0
+      if mode() =~# '^i' && &buftype ==# '' && !empty(&filetype)
+        let s:auto_timer = timer_start(400, function('s:AutoComplete'))
+      endif
+    endif
     return
   endif
 
-  if get(s:request, 'kind', '') ==# 'complete'
-    if bufnr('%') == s:request.buffer && line('.') == s:request.line
+  if index(['complete', 'auto_complete'], get(s:request, 'kind', '')) >= 0
+    let l:request_matches = bufnr('%') == s:request.buffer
+          \ && line('.') == s:request.line && col('.') == s:request.column
+          \ && b:changedtick == s:request.changedtick
           \ && strpart(getline('.'), 0, col('.') - 1) ==# s:request.prefix
-          \ && mode() =~# '^i'
+    if l:request_matches && mode() =~# '^i'
       try
         call s:StopAutoTimer()
         call s:ShowSuggestion(l:response)
@@ -136,16 +158,13 @@ function! s:AIExit(job, status) abort
         let s:request.pending = l:response
         echom 'AI suggestion is ready; :AIAccept returns to its original location and inserts it.'
       endtry
-    else
-      if bufnr('%') == s:request.buffer && line('.') == s:request.line && mode() =~# '^i'
-        if exists('*timer_start')
-          call s:StopAutoTimer()
-          let s:auto_timer = timer_start(400, function('s:AutoComplete'))
-        endif
-      else
-        let s:request.pending = l:response
-        echom 'AI suggestion is ready; :AIAccept returns to its original location and inserts it.'
+    elseif get(s:request, 'kind', '') ==# 'auto_complete'
+      if bufnr('%') == s:request.buffer && mode() =~# '^i'
+        let s:auto_rerun = 1
       endif
+    else
+      let s:request.pending = l:response
+      echom 'AI suggestion is ready; :AIAccept returns to its original location and inserts it.'
     endif
   elseif bufnr('%') == s:request.buffer && getbufvar(s:request.buffer, 'changedtick') == s:request.changedtick
     call setbufline(s:request.buffer, s:request.startline, split(l:response, "\n", 1))
@@ -158,6 +177,12 @@ function! s:AIExit(job, status) abort
     echom 'AI response is ready; the buffer changed, so it was not inserted.'
   endif
   let s:job = 0
+  if s:auto_rerun
+    let s:auto_rerun = 0
+    if mode() =~# '^i' && &buftype ==# '' && !empty(&filetype)
+      let s:auto_timer = timer_start(400, function('s:AutoComplete'))
+    endif
+  endif
 endfunction
 
 function! s:Start(prompt, kind) abort
@@ -214,7 +239,6 @@ function! s:CompletionContext() abort
         \ 'Current file: ' . (empty(expand('%:p')) ? '[unnamed buffer]' : expand('%:p')),
         \ 'Filetype: ' . &filetype,
         \ 'Cursor position: line ' . line('.') . ', byte column ' . col('.'),
-        \ 'Inspect relevant files and project instructions in the workspace using read-only file tools before completing. Do not run commands or modify files.',
         \ 'Return only the text to insert at the cursor. Do not include explanations or markdown fences.',
         \ '',
         \ 'Current buffer snapshot (full in-memory file, including unsaved changes; <<<CURSOR>>> marks the insertion point):',
@@ -224,6 +248,9 @@ function! s:CompletionContext() abort
         \ ]
 
   let l:other_buffers = []
+  let l:workspace = fnamemodify(getcwd(), ':p')
+  let l:workspace_prefix = l:workspace =~# '[/\\]$' ? l:workspace : l:workspace . '/'
+  let l:context_size = 0
   for l:buffer in getbufinfo()
     if l:buffer.bufnr == bufnr('%') || !l:buffer.loaded
       continue
@@ -233,25 +260,41 @@ function! s:CompletionContext() abort
           \ || getbufvar(l:buffer.bufnr, '&binary')
       continue
     endif
-    call add(l:other_buffers, 'File: ' . fnamemodify(l:name, ':p') . "\n```"
+    let l:path = fnamemodify(l:name, ':p')
+    if stridx(l:path, l:workspace_prefix) != 0
+      continue
+    endif
+    let l:contents = join(getbufline(l:buffer.bufnr, 1, '$'), "\n")
+    if strlen(l:contents) > 8000 || l:context_size + strlen(l:contents) > 16000
+      continue
+    endif
+    call add(l:other_buffers, 'File: ' . l:path . "\n```"
           \ . getbufvar(l:buffer.bufnr, '&filetype') . "\n"
-          \ . join(getbufline(l:buffer.bufnr, 1, '$'), "\n") . "\n```")
+          \ . l:contents . "\n```")
+    let l:context_size += strlen(l:contents)
+    if len(l:other_buffers) >= 3
+      break
+    endif
   endfor
   call add(l:context, '')
-  call add(l:context, 'Other open file buffers (full in-memory contents):')
-  call extend(l:context, empty(l:other_buffers) ? ['[No other loaded file buffers]'] : l:other_buffers)
+  call add(l:context, 'Other open project buffers (up to 8 KB each, 16 KB total):')
+  call extend(l:context, empty(l:other_buffers) ? ['[No other loaded project buffers]'] : l:other_buffers)
   return join(l:context, "\n")
 endfunction
 
-function! VimToolsAIComplete() abort
+function! s:StartCompletion(kind) abort
   call s:StopAutoTimer()
   if !has('job') || !has('channel')
     echoerr 'AI completion requires Vim +job and +channel.'
     return
   endif
-  let l:prompt = 'Complete the code at the cursor. Keep the completion concise and syntactically consistent.'
+  let l:prompt = 'Complete the code at the cursor using only the supplied in-memory context. Do not call tools, run commands, or modify files. Keep the completion concise and syntactically consistent.'
         \ . "\n\n" . s:CompletionContext()
-  call s:Start(l:prompt, 'complete')
+  call s:Start(l:prompt, a:kind)
+endfunction
+
+function! VimToolsAIComplete() abort
+  call s:StartCompletion('complete')
 endfunction
 
 function! VimToolsAIGenerate(startline, endline, instruction) abort
@@ -281,6 +324,7 @@ function! VimToolsAIStart(instruction) abort
   endif
   let l:context = 'Opened from Vim. Workspace directory: ' . getcwd()
         \ . '. User request: ' . l:instruction . "\n\n" . s:CompletionContext()
+        \ . "\n\nInspect relevant workspace files and project instructions with read-only tools before responding. Do not run commands or modify files."
   if s:provider ==# 'copilot'
     let l:argv = [s:cli, '--interactive', l:context]
   elseif s:provider ==# 'codex'
@@ -346,6 +390,51 @@ function! VimToolsAIAcceptGhost() abort
   return "\<C-y>"
 endfunction
 
+function! VimToolsAIQueuedSuggestion() abort
+  return remove(s:, 'accepted_ghost')
+endfunction
+
+function! VimToolsAIAcceptTab() abort
+  if !empty(s:ghost)
+    let l:text = s:ghost
+    call s:ClearGhost()
+    let s:accepted_ghost = l:text
+    let l:register = l:text =~# "\n" ? "\<C-R>\<C-O>=" : "\<C-R>\<C-R>="
+    return l:register . 'VimToolsAIQueuedSuggestion()' . "\<CR>"
+  endif
+  if pumvisible()
+    return "\<C-y>"
+  endif
+  if type(s:tab_fallback) == v:t_func
+    try
+      return call(s:tab_fallback, [])
+    catch
+      return "\<Tab>"
+    endtry
+  endif
+  return s:tab_fallback
+endfunction
+
+function! s:MapTab() abort
+  let l:tab_map = maparg('<Tab>', 'i', 0, 1)
+  if has_key(l:tab_map, 'rhs') && l:tab_map.rhs =~# 'VimToolsAIAcceptTab'
+    return
+  endif
+  if has_key(l:tab_map, 'rhs')
+    if get(l:tab_map, 'expr', 0)
+      let s:tab_fallback = '{ -> ' . l:tab_map.rhs . ' }'
+      let s:tab_fallback = substitute(s:tab_fallback, '<SID>', '<SNR>' . get(l:tab_map, 'sid') . '_', 'g')
+      let s:tab_fallback = eval(s:tab_fallback)
+    else
+      let s:tab_fallback = substitute(json_encode(l:tab_map.rhs), '<', '\\<', 'g')
+      let s:tab_fallback = eval(s:tab_fallback)
+    endif
+  else
+    let s:tab_fallback = "\<Tab>"
+  endif
+  inoremap <script><silent><expr> <Tab> VimToolsAIAcceptTab()
+endfunction
+
 command! AIComplete call VimToolsAIComplete()
 command! -range -nargs=* AIGenerate call VimToolsAIGenerate(<line1>, <line2>, <q-args>)
 command! -nargs=* AIAssistant call VimToolsAIStart(<q-args>)
@@ -353,9 +442,11 @@ command! AIAccept call VimToolsAIAccept()
 command! AIDismiss call s:ClearGhost()
 inoremap <silent> <C-x><C-a> <C-o>:call VimToolsAIComplete()<CR>
 inoremap <silent><expr> <C-y> VimToolsAIAcceptGhost()
+call s:MapTab()
 
 augroup vim_tools_ai_completion
   autocmd!
-  autocmd TextChangedI * call <SID>ClearGhost() | call <SID>ScheduleCompletion()
-  autocmd CursorMovedI,InsertLeave,BufLeave * call <SID>ClearGhost()
+  autocmd TextChangedI,InsertCharPre * call <SID>ClearGhost() | call <SID>ScheduleCompletion()
+  autocmd InsertEnter,CursorMovedI * call <SID>ClearGhost() | call <SID>ScheduleCompletion()
+  autocmd InsertLeave,BufLeave * call <SID>StopAutoTimer() | call <SID>ClearGhost()
 augroup END
