@@ -14,6 +14,10 @@ let s:ghost = ''
 let s:auto_timer = -1
 highlight default link VimToolsAICompletion Comment
 
+function! s:JobRunning() abort
+  return type(s:job) == v:t_job && job_status(s:job) ==# 'run'
+endfunction
+
 function! s:StopAutoTimer() abort
   if s:auto_timer != -1
     call timer_stop(s:auto_timer)
@@ -23,7 +27,8 @@ endfunction
 
 function! s:ClearGhost() abort
   let s:ghost = ''
-  if exists('*prop_remove')
+  if exists('*prop_remove') && exists('*prop_type_get')
+        \ && !empty(prop_type_get('VimToolsAICompletion'))
     silent! call prop_remove({'type': 'VimToolsAICompletion', 'all': 1}, 1, line('$'))
   endif
 endfunction
@@ -40,7 +45,7 @@ endfunction
 
 function! s:AutoComplete(timer) abort
   let s:auto_timer = -1
-  if s:job > 0 && job_status(s:job) ==# 'run'
+  if s:JobRunning()
     let s:auto_timer = timer_start(500, function('s:AutoComplete'))
   elseif mode() =~# '^i'
     call VimToolsAIComplete()
@@ -67,9 +72,9 @@ endfunction
 function! s:AICommand(prompt, output_path) abort
   if s:provider ==# 'copilot'
     return [s:cli, '-p', a:prompt, '--silent',
-          \ '--deny-tool=shell', '--deny-tool=write', '--deny-tool=read',
+          \ '--deny-tool=shell', '--deny-tool=write',
           \ '--deny-tool=create', '--deny-tool=edit', '--deny-tool=apply_patch',
-          \ '--deny-tool=grep', '--deny-tool=glob', '--deny-tool=web_fetch',
+          \ '--deny-tool=web_fetch',
           \ '--deny-tool=task', '--deny-tool=skill']
   elseif s:provider ==# 'codex'
     return [s:cli, 'exec', '--ephemeral', '--sandbox', 'read-only',
@@ -160,7 +165,7 @@ function! s:Start(prompt, kind) abort
     echoerr 'AI CLI not found: ' . s:provider . '. Install and authenticate it, then rerun the Vim setup.'
     return
   endif
-  if s:job > 0 && job_status(s:job) ==# 'run'
+  if s:JobRunning()
     echoerr 'An AI request is already running.'
     return
   endif
@@ -168,6 +173,7 @@ function! s:Start(prompt, kind) abort
   let s:request = {
         \ 'kind': a:kind, 'output': '', 'error': '', 'buffer': bufnr('%'),
         \ 'line': line('.'), 'column': col('.'), 'prefix': strpart(getline('.'), 0, col('.') - 1),
+        \ 'workspace': getcwd(),
         \ 'changedtick': b:changedtick,
         \ 'startline': get(s:, 'generate_start', line('.')),
         \ 'endline': get(s:, 'generate_end', line('.'))
@@ -183,7 +189,7 @@ function! s:Start(prompt, kind) abort
   let l:options = {
         \ 'out_cb': function('s:AIOut'), 'err_cb': function('s:AIErr'),
         \ 'exit_cb': function('s:AIExit'), 'out_mode': 'nl', 'err_mode': 'nl',
-        \ 'cwd': fnamemodify(expand('%:p'), ':h')
+        \ 'cwd': getcwd()
         \ }
   let s:job = job_start(l:argv, l:options)
   if job_status(s:job) !=# 'run'
@@ -197,21 +203,54 @@ function! s:Start(prompt, kind) abort
   echom 'AI completion requested from ' . s:provider . '.'
 endfunction
 
+function! s:CompletionContext() abort
+  let l:current_lines = getline(1, '$')
+  let l:current_line = getline('.')
+  let l:cursor_offset = col('.') - 1
+  let l:current_lines[line('.') - 1] = strpart(l:current_line, 0, l:cursor_offset)
+        \ . '<<<CURSOR>>>' . strpart(l:current_line, l:cursor_offset)
+  let l:context = [
+        \ 'Workspace directory: ' . getcwd(),
+        \ 'Current file: ' . (empty(expand('%:p')) ? '[unnamed buffer]' : expand('%:p')),
+        \ 'Filetype: ' . &filetype,
+        \ 'Cursor position: line ' . line('.') . ', byte column ' . col('.'),
+        \ 'Inspect relevant files and project instructions in the workspace using read-only file tools before completing. Do not run commands or modify files.',
+        \ 'Return only the text to insert at the cursor. Do not include explanations or markdown fences.',
+        \ '',
+        \ 'Current buffer snapshot (full in-memory file, including unsaved changes; <<<CURSOR>>> marks the insertion point):',
+        \ '```' . &filetype,
+        \ join(l:current_lines, "\n"),
+        \ '```'
+        \ ]
+
+  let l:other_buffers = []
+  for l:buffer in getbufinfo()
+    if l:buffer.bufnr == bufnr('%') || !l:buffer.loaded
+      continue
+    endif
+    let l:name = bufname(l:buffer.bufnr)
+    if empty(l:name) || getbufvar(l:buffer.bufnr, '&buftype') !=# ''
+          \ || getbufvar(l:buffer.bufnr, '&binary')
+      continue
+    endif
+    call add(l:other_buffers, 'File: ' . fnamemodify(l:name, ':p') . "\n```"
+          \ . getbufvar(l:buffer.bufnr, '&filetype') . "\n"
+          \ . join(getbufline(l:buffer.bufnr, 1, '$'), "\n") . "\n```")
+  endfor
+  call add(l:context, '')
+  call add(l:context, 'Other open file buffers (full in-memory contents):')
+  call extend(l:context, empty(l:other_buffers) ? ['[No other loaded file buffers]'] : l:other_buffers)
+  return join(l:context, "\n")
+endfunction
+
 function! VimToolsAIComplete() abort
   call s:StopAutoTimer()
   if !has('job') || !has('channel')
     echoerr 'AI completion requires Vim +job and +channel.'
     return
   endif
-  let l:before = getline(max([1, line('.') - 80]), line('.') - 1)
-  let l:current = getline('.')
-  let l:prefix = strpart(l:current, 0, col('.') - 1)
-  let l:suffix = strpart(l:current, col('.') - 1)
-  let l:after = getline(line('.') + 1, min([line('$'), line('.') + 20]))
-  let l:prompt = 'Complete the code at the cursor. Return only the text to insert, with no markdown fences or explanation. Keep the completion concise and syntactically consistent. Filetype: ' . &filetype . "\n"
-        \ . "Context before cursor:\n" . join(l:before, "\n") . "\n"
-        \ . l:prefix . "<CURSOR>" . l:suffix . "\n"
-        \ . join(l:after, "\n")
+  let l:prompt = 'Complete the code at the cursor. Keep the completion concise and syntactically consistent.'
+        \ . "\n\n" . s:CompletionContext()
   call s:Start(l:prompt, 'complete')
 endfunction
 
@@ -240,7 +279,8 @@ function! VimToolsAIStart(instruction) abort
     echoerr 'AI CLI not found: ' . s:provider . '. Install and authenticate it, then rerun the Vim setup.'
     return
   endif
-  let l:context = 'Opened from Vim at ' . expand('%:p') . ':' . line('.') . ' (' . &filetype . '). User request: ' . l:instruction
+  let l:context = 'Opened from Vim. Workspace directory: ' . getcwd()
+        \ . '. User request: ' . l:instruction . "\n\n" . s:CompletionContext()
   if s:provider ==# 'copilot'
     let l:argv = [s:cli, '--interactive', l:context]
   elseif s:provider ==# 'codex'
@@ -249,7 +289,7 @@ function! VimToolsAIStart(instruction) abort
     let l:argv = [s:cli, l:context]
   endif
   try
-    call term_start(l:argv, {'cwd': fnamemodify(expand('%:p'), ':h'), 'term_name': 'AI: ' . s:provider})
+    call term_start(l:argv, {'cwd': getcwd(), 'term_name': 'AI: ' . s:provider})
   catch
     echoerr 'Could not open AI assistant terminal: ' . v:exception
   endtry

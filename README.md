@@ -56,15 +56,16 @@ To install to a different home directory or supply a JDK explicitly:
 perl cli/setup.pl --home /path/to/home --jdk 21=/opt/jdk-21
 ```
 
-When installing this project with Developer Dashboard, use `CODE/` as the skill
-root so Dashboard can find the CLI and `.env`:
+Install the published repository through Developer Dashboard by its Git
+repository name:
 
 ```sh
-d2 skill install ~/projects/vim/CODE
-d2 CODE.setup
+d2 skill install vim
+d2 vim.setup
 ```
 
-Dashboard derives the skill command name from the installed directory name.
+Dashboard installs the remote repository under the `vim` skill name and uses
+that name for its setup command.
 
 The installer creates a timestamped backup before changing an existing `.vimrc`
 and manages only the block between `vim-tools-java` markers. It installs the local
@@ -118,10 +119,14 @@ the current line; run it over a Visual selection to replace those lines.
 `:AIAssistant [prompt]` opens the selected interactive CLI in a Vim terminal at
 the current file's directory.
 
-Completion and generation requests send the surrounding code or selected text
-to the configured provider. They run non-interactively with file-writing tools
-disabled; generated text is inserted by Vim. The terminal assistant follows
-the selected CLI's regular permissions and approval settings.
+Completion prompts include the full in-memory current buffer, the cursor
+position, and all other loaded file buffers, including unsaved edits. The
+selected CLI runs from Vim's current working directory and can inspect relevant
+project files for additional context. Copilot read/search tools remain enabled;
+write and shell tools are disabled. Codex uses its read-only sandbox and Claude
+uses plan mode. Generation requests include the selected source text. Vim
+inserts generated text; the terminal assistant follows the selected CLI's
+regular permissions and approval settings.
 
 Java tests use the nearest Maven module and run `mvn -Dtest=Class[#method] test`
 (or that module's `mvnw`). The helper reads the project's Java version from the
@@ -148,8 +153,9 @@ project debugger file untouched.
 - `assets/vim/`: Vim plugin, installed command-line helper, and Vimspector test
   attach profile, plus the AI completion and assistant commands.
 - `t/`: Perl unit tests (`prove -Ilib t`).
-- `.env/README.md`, `.env/VERSION`: project-local environment metadata; the
-  version placeholder is deliberately `VERSION=XXX` until a release is chosen.
+- `.env`: tracked project version (`VERSION`) and selected Vim AI CLI
+  (`VIM_AI_WITH`). Increment `VERSION` when updating the installed Dashboard
+  skill so setup commands use the current project files.
 
 See [`VIM_WITH_JAVA.md`](VIM_WITH_JAVA.md) for the inspection notes on `hov1`.
 
