@@ -105,8 +105,8 @@ PERL
     print {$vimscript} "let g:auto_fn = matchstr(execute('function /AutoComplete'), '<SNR>\\d\\+_AutoComplete')\n";
     print {$vimscript} "let g:timers_before = len(timer_info())\n";
     print {$vimscript} "execute 'call ' . g:auto_fn . '(0)'\nlet g:timers_after = len(timer_info())\n";
-    print {$vimscript} "sleep 1500m\ncall VimToolsAIAccept()\n";
-    print {$vimscript} "call writefile([getline(102)], '$result')\n";
+    print {$vimscript} "sleep 1500m\nexecute 'buffer! ' . g:open_buffer\ncall VimToolsAIAccept()\n";
+    print {$vimscript} "call writefile([expand('%:p'), getline(102)], '$result')\n";
     print {$vimscript} "call writefile([v:errmsg], '$tmp/$provider-errmsg.txt')\n";
     print {$vimscript} "call writefile([string(g:timers_before), string(g:timers_after)], '$tmp/$provider-timers.txt')\n";
     print {$vimscript} "if has('patch-9.2.0000')\n";
@@ -136,7 +136,10 @@ PERL
         my @lines = <$output>;
         close $output;
         chomp @lines;
-        is_deeply(\@lines, [$expected{$provider}], "$provider $case->[0] returns its response into the buffer");
+        my $expected_lines = $case->[0] eq 'completion'
+            ? [File::Spec->catfile($workspace, 'current.pl'), $expected{$provider}]
+            : [$expected{$provider}];
+        is_deeply(\@lines, $expected_lines, "$provider $case->[0] returns its response to the expected buffer");
     }
     open my $prompt_fh, '<', $prompt_capture or die "No completion prompt from $provider: $!";
     my $prompt = do { local $/; <$prompt_fh> // '' };

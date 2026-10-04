@@ -19,7 +19,8 @@ like($vimrc, qr/clipboard=unnamedplus,autoselect/, 'mouse and Visual selections 
 open my $navigation_asset, '<', File::Spec->catfile('assets', 'vim', 'after', 'plugin', 'java-tools.vim') or die $!;
 my $navigation = do { local $/; <$navigation_asset> };
 close $navigation_asset;
-unlike($navigation, qr/nnoremap <silent> g[tT] /, 'gt and gT keep Vim default tab navigation');
+like($navigation, qr/nnoremap <silent> gt :bnext<CR>/, 'gt moves to the next tabline buffer');
+like($navigation, qr/nnoremap <silent> gT :bprevious<CR>/, 'gT moves to the previous tabline buffer');
 like($navigation, qr/function! s:JavaProjectSource\(class_name\)/, 'Java navigation searches project source roots');
 like($navigation, qr/function! s:JavaMavenSource\(class_name\)/, 'Java navigation searches Maven source JARs');
 like($navigation, qr/return 'zipfile:\/\/' \. l:jar \. '::' \. l:relative/, 'Maven sources open through Vim ZIP support');

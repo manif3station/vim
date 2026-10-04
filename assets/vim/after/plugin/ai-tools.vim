@@ -133,8 +133,8 @@ function! s:AIExit(job, status) abort
         call s:StopAutoTimer()
         call s:ShowSuggestion(l:response)
       catch
-        echom 'AI suggestion is ready; use :AIAccept to insert it.'
         let s:request.pending = l:response
+        echom 'AI suggestion is ready; :AIAccept returns to its original location and inserts it.'
       endtry
     else
       if bufnr('%') == s:request.buffer && line('.') == s:request.line && mode() =~# '^i'
@@ -144,7 +144,7 @@ function! s:AIExit(job, status) abort
         endif
       else
         let s:request.pending = l:response
-        echom 'AI suggestion is ready; use :AIAccept to insert it.'
+        echom 'AI suggestion is ready; :AIAccept returns to its original location and inserts it.'
       endif
     endif
   elseif bufnr('%') == s:request.buffer && getbufvar(s:request.buffer, 'changedtick') == s:request.changedtick
@@ -301,18 +301,39 @@ function! VimToolsAIAccept() abort
     echoerr 'No pending AI response.'
     return
   endif
-  let l:line = getline('.')
-  let l:prefix = strpart(l:line, 0, col('.') - 1)
-  let l:suffix = strpart(l:line, col('.') - 1)
+  let l:buffer = get(s:request, 'buffer', -1)
+  let l:target_line = get(s:request, 'line', 0)
+  let l:column = get(s:request, 'column', 0)
+  if !bufexists(l:buffer)
+    echom 'AI suggestion target no longer exists; response was not inserted.'
+    return
+  endif
+  let l:target = getbufline(l:buffer, l:target_line)
+  if empty(l:target) || l:column < 1
+    echom 'AI suggestion target no longer exists; response was not inserted.'
+    return
+  endif
+  let l:line = l:target[0]
+  let l:prefix = get(s:request, 'prefix', '')
+  if strpart(l:line, 0, l:column - 1) !=# l:prefix
+    echom 'AI suggestion target changed; response was not inserted.'
+    return
+  endif
+  if bufnr('%') != l:buffer
+    execute 'buffer! ' . l:buffer
+  endif
+  call cursor(l:target_line, l:column)
+  let l:suffix = strpart(l:line, l:column - 1)
   let l:parts = split(l:text, "\n", 1)
   if len(l:parts) == 1
-    call setline('.', l:prefix . l:parts[0] . l:suffix)
+    call setline(l:target_line, l:prefix . l:parts[0] . l:suffix)
   else
     let l:parts[0] = l:prefix . l:parts[0]
     let l:parts[-1] .= l:suffix
-    call setline('.', l:parts[0])
-    call append(line('.'), l:parts[1:])
+    call setline(l:target_line, l:parts[0])
+    call append(l:target_line, l:parts[1:])
   endif
+  call cursor(l:target_line + len(l:parts) - 1, strlen(l:parts[-1]) - strlen(l:suffix) + 1)
   let s:request.pending = ''
 endfunction
 

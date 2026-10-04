@@ -306,6 +306,8 @@ nnoremap <silent> <C-w>f :call VimToolsGotoFile('split')<CR>
 nnoremap <silent> <C-w>F :call VimToolsGotoFile('split-line')<CR>
 nnoremap <silent> <C-w>gf :call VimToolsGotoFile('tab')<CR>
 nnoremap <silent> <C-w>gF :call VimToolsGotoFile('tab-line')<CR>
+nnoremap <silent> gt :bnext<CR>
+nnoremap <silent> gT :bprevious<CR>
 command! JavaTestNearest call JavaTestNearest()
 command! JavaTestFile call JavaTestFile()
 command! JavaDebugTestNearest call JavaDebugTestNearest()
