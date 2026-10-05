@@ -127,9 +127,7 @@ set splitright splitbelow scrolloff=4 sidescrolloff=8 updatetime=250 timeoutlen=
 set showmode showtabline=2 mouse=a laststatus=2 hlsearch
 if has('termguicolors') | set termguicolors | endif
 if has('clipboard')
-  if empty($TMUX)
-    set clipboard=unnamedplus,autoselect
-  elseif has('patch-9.1.0000')
+  if has('patch-9.1.0000')
     set clipboard=autoselectplus
   else
     set clipboard=

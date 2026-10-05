@@ -17,14 +17,15 @@ my $vimrc = render_vimrc(
 like($vimrc, qr/" >>> vim-tools-java BEGIN/, 'managed config block has a start marker');
 like($vimrc, qr/" <<< vim-tools-java END/, 'managed config block has an end marker');
 like($vimrc, qr/Plug 'neoclide\/coc\.nvim', \{'branch': 'release'\}/, 'classic Vim coc plugin is declared');
-like($vimrc, qr/if empty\(\$TMUX\).*clipboard=unnamedplus,autoselect.*clipboard=autoselectplus.*set clipboard=/s, 'Vim copies Visual selections to the host in tmux without aliasing yy/p');
+like($vimrc, qr/if has\('patch-9\.1\.0000'\).*clipboard=autoselectplus.*set clipboard=/s, 'Visual selections use the host clipboard without aliasing yy/p/P');
+unlike($vimrc, qr/clipboard=unnamedplus/, 'generated Vim config leaves native p/P on the unnamed register');
 like($vimrc, qr/autocmd FileType java,perl setlocal expandtab tabstop=4 shiftwidth=4 softtabstop=4/, 'Java and Perl use four spaces');
 like($vimrc, qr/autocmd FileType javascript,javascriptreact,typescript,typescriptreact,css,xml,html,xhtml,yaml setlocal expandtab tabstop=2 shiftwidth=2 softtabstop=2/, 'JavaScript, CSS, XML, HTML, and YAML use two spaces');
 like($vimrc, qr/set showmode showtabline=2 mouse=a laststatus=2 hlsearch/, 'search results remain highlighted after pressing n or N');
 SKIP: {
     my $vim = `command -v vim 2>/dev/null`;
     chomp $vim;
-    skip 'Vim editor settings integration requires classic Vim on Unix-like systems', 11
+    skip 'Vim editor settings integration requires classic Vim on Unix-like systems', 14
         unless $vim && $^O ne 'MSWin32';
     my ($clipboard_config) = $vimrc =~ /(^if has\('clipboard'\)\n.*?^endif$)/ms;
     ok(defined $clipboard_config, 'installer renders a complete clipboard configuration block');
@@ -35,6 +36,7 @@ SKIP: {
     my $clipboard_home = tempdir(CLEANUP => 1);
     my $script = File::Spec->catfile($clipboard_home, 'clipboard.vim');
     my $result = File::Spec->catfile($clipboard_home, 'clipboard-result.txt');
+    my $paste_result = File::Spec->catfile($clipboard_home, 'paste-result.txt');
     my $clipboard_state = File::Spec->catfile($clipboard_home, 'clipboard-state.txt');
     my $search_result = File::Spec->catfile($clipboard_home, 'search-result.txt');
     my $indent_result = File::Spec->catfile($clipboard_home, 'indent-result.txt');
@@ -55,7 +57,10 @@ SKIP: {
     print {$script_fh} "call setline(1, ['first line', 'second line'])\n";
     print {$script_fh} "normal! gg\nnormal! yy\nnormal! j\nnormal! p\n";
     print {$script_fh} "call writefile(getline(1, '\$'), " . vim_string($result) . ")\n";
-    print {$script_fh} "normal! gg\n/line\nnormal! n\ncall writefile([string(&hlsearch), string(line('.'))], " . vim_string($search_result) . ")\nqa!\n";
+    print {$script_fh} "normal! gg\n/line\nnormal! n\ncall writefile([string(&hlsearch), string(line('.'))], " . vim_string($search_result) . ")\n";
+    print {$script_fh} "enew!\ncall setline(1, 'alpha')\ncall setreg('\"', 'XY', 'v')\nnormal gg0p\nlet g:paste_after = getline(1)\n";
+    print {$script_fh} "enew!\ncall setline(1, 'alpha')\ncall setreg('\"', 'XY', 'v')\nnormal gg0P\n";
+    print {$script_fh} "call writefile([g:paste_after, getline(1)], " . vim_string($paste_result) . ")\nqa!\n";
     close $script_fh;
     local $ENV{TMUX} = 'vim-test-session';
     my $status = system($vim, '-Nu', 'NONE', '-n', '-i', 'NONE', '-es', "-V1$vim_log", '-S', $script);
@@ -99,6 +104,23 @@ SKIP: {
     chomp @lines;
     is_deeply(\@lines, ['first line', 'second line', 'first line'],
         'yy followed by p yanks and pastes a line inside tmux');
+
+    {
+        local $ENV{TMUX} = '';
+        is(system($vim, '-Nu', 'NONE', '-n', '-i', 'NONE', '-es', '-S', $script), 0,
+            'Vim executes the generated clipboard configuration outside tmux');
+    }
+    open my $outside_state_fh, '<', $clipboard_state or die "No outside-tmux clipboard state: $!";
+    my @outside_state = <$outside_state_fh>;
+    close $outside_state_fh;
+    chomp @outside_state;
+    is($outside_state[2], $outside_state[0] eq '1' && $outside_state[1] eq '1' ? 'autoselectplus' : '',
+        'outside tmux, the system clipboard does not replace the unnamed register');
+    open my $paste_fh, '<', $paste_result or die "No outside-tmux paste output: $!";
+    my @paste_lines = <$paste_fh>;
+    close $paste_fh;
+    chomp @paste_lines;
+    is_deeply(\@paste_lines, ['aXYlpha', 'XYalpha'], 'native p and P paste from the unnamed register outside tmux');
 
     SKIP: {
         my $tmux = `command -v tmux 2>/dev/null`;

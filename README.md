@@ -91,7 +91,7 @@ spaces in these filetypes.
 Vim enables mouse support. Visual selections copy to the host clipboard when
 the Vim build supports it. `Ctrl-C` copies the current line or selection, and
 `<Space>p` pastes from the host clipboard. `Ctrl-V` keeps Vim's built-in
-blockwise Visual selection. In tmux, ordinary `yy`/`p` use Vim's local register
+blockwise Visual selection. Ordinary `yy`/`p`/`P` use Vim's local register,
 while mouse selections and `Ctrl-C`/`<Space>p` use the `+` clipboard register.
 
 Search matches stay highlighted after `/` or `?` searches and while moving
