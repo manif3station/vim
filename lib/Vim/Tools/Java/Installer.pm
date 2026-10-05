@@ -127,11 +127,22 @@ set splitright splitbelow scrolloff=4 sidescrolloff=8 updatetime=250 timeoutlen=
 set showmode showtabline=2 mouse=a laststatus=2
 if has('termguicolors') | set termguicolors | endif
 if has('clipboard')
-  if empty($TMUX) | set clipboard=unnamedplus,autoselect | else | set clipboard= | endif
+  if empty($TMUX)
+    set clipboard=unnamedplus,autoselect
+  elseif has('patch-9.1.0000')
+    set clipboard=autoselectplus
+  else
+    set clipboard=
+  endif
 endif
 let mapleader = ' '
 syntax on
 filetype plugin indent on
+augroup vim_tools_indentation
+  autocmd!
+  autocmd FileType java,perl setlocal expandtab tabstop=4 shiftwidth=4 softtabstop=4
+  autocmd FileType javascript,javascriptreact,typescript,typescriptreact,css,xml,html,xhtml,yaml setlocal expandtab tabstop=2 shiftwidth=2 softtabstop=2
+augroup END
 VIM
     $conf .= "let g:coc_config_home = expand('$home/coc')\n";
     $conf .= "let g:coc_data_home = expand('$home/coc-data')\n";
@@ -296,6 +307,8 @@ sub _install_assets {
       or die "Cannot install Vim Java plugin asset: $!\n";
     copy(File::Spec->catfile($assets, 'after', 'plugin', 'ai-tools.vim'), File::Spec->catfile($plugin_dir, 'ai-tools.vim'))
       or die "Cannot install Vim AI plugin asset: $!\n";
+    copy(File::Spec->catfile($assets, 'after', 'plugin', 'clipboard.vim'), File::Spec->catfile($plugin_dir, 'clipboard.vim'))
+      or die "Cannot install Vim clipboard plugin asset: $!\n";
     copy(File::Spec->catfile($assets, 'bin', 'java-project.pl'), File::Spec->catfile($bin_dir, 'java-project.pl'))
       or die "Cannot install Java project helper: $!\n";
     chmod 0755, File::Spec->catfile($bin_dir, 'java-project.pl');

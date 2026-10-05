@@ -17,21 +17,36 @@ my $vimrc = render_vimrc(
 like($vimrc, qr/" >>> vim-tools-java BEGIN/, 'managed config block has a start marker');
 like($vimrc, qr/" <<< vim-tools-java END/, 'managed config block has an end marker');
 like($vimrc, qr/Plug 'neoclide\/coc\.nvim', \{'branch': 'release'\}/, 'classic Vim coc plugin is declared');
-like($vimrc, qr/if empty\(\$TMUX\).*clipboard=unnamedplus,autoselect.*set clipboard=/s, 'host clipboard is used outside tmux and Vim keeps local registers in tmux');
+like($vimrc, qr/if empty\(\$TMUX\).*clipboard=unnamedplus,autoselect.*clipboard=autoselectplus.*set clipboard=/s, 'Vim copies Visual selections to the host in tmux without aliasing yy/p');
+like($vimrc, qr/autocmd FileType java,perl setlocal expandtab tabstop=4 shiftwidth=4 softtabstop=4/, 'Java and Perl use four spaces');
+like($vimrc, qr/autocmd FileType javascript,javascriptreact,typescript,typescriptreact,css,xml,html,xhtml,yaml setlocal expandtab tabstop=2 shiftwidth=2 softtabstop=2/, 'JavaScript, CSS, XML, HTML, and YAML use two spaces');
 SKIP: {
     my $vim = `command -v vim 2>/dev/null`;
     chomp $vim;
-    skip 'Vim register integration requires classic Vim on Unix-like systems', 3
+    skip 'Vim editor settings integration requires classic Vim on Unix-like systems', 7
         unless $vim && $^O ne 'MSWin32';
     my ($clipboard_config) = $vimrc =~ /(^if has\('clipboard'\)\n.*?^endif$)/ms;
     ok(defined $clipboard_config, 'installer renders a complete clipboard configuration block');
+    my ($indent_config) = $vimrc =~ /(augroup vim_tools_indentation\n.*?augroup END)/s;
+    ok(defined $indent_config, 'installer renders filetype-specific indentation rules');
     my $clipboard_home = tempdir(CLEANUP => 1);
     my $script = File::Spec->catfile($clipboard_home, 'clipboard.vim');
     my $result = File::Spec->catfile($clipboard_home, 'clipboard-result.txt');
+    my $clipboard_state = File::Spec->catfile($clipboard_home, 'clipboard-state.txt');
+    my $indent_result = File::Spec->catfile($clipboard_home, 'indent-result.txt');
     my $vim_log = File::Spec->catfile($clipboard_home, 'clipboard-vim.log');
+    my $clipboard_plugin = abs_path(File::Spec->catfile('assets', 'vim', 'after', 'plugin', 'clipboard.vim'));
     open my $script_fh, '>', $script or die "Cannot write Vim clipboard fixture: $!";
     print {$script_fh} "if has('clipboard') | set clipboard=unnamedplus | endif\n";
     print {$script_fh} "$clipboard_config\n";
+    print {$script_fh} "filetype plugin indent on\n$indent_config\n";
+    print {$script_fh} "source $clipboard_plugin\n";
+    print {$script_fh} "let g:indent_results = []\n";
+    print {$script_fh} "for ft in ['java', 'perl', 'javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'css', 'xml', 'html', 'xhtml', 'yaml']\n";
+    print {$script_fh} "  setlocal filetype=\n  execute 'setfiletype ' . ft\n";
+    print {$script_fh} "  call add(g:indent_results, printf('%s:%d:%d:%d:%d', &l:filetype, &l:tabstop, &l:shiftwidth, &l:softtabstop, &l:expandtab))\nendfor\n";
+    print {$script_fh} "call writefile(g:indent_results, " . vim_string($indent_result) . ")\n";
+    print {$script_fh} "call writefile([string(has('clipboard')), string(has('patch-9.1.0000')), &clipboard, maparg('<C-c>', 'n'), maparg('<C-c>', 'x'), maparg('<C-v>', 'n'), maparg('<C-v>', 'i')], " . vim_string($clipboard_state) . ")\n";
     print {$script_fh} "call setline(1, ['first line', 'second line'])\n";
     print {$script_fh} "normal! gg\nnormal! yy\nnormal! j\nnormal! p\n";
     print {$script_fh} "call writefile(getline(1, '\$'), " . vim_string($result) . ")\nqa!\n";
@@ -44,12 +59,79 @@ SKIP: {
         close $log_fh;
     }
     is($status, 0, 'Vim executes the generated clipboard configuration in tmux mode');
+    open my $indent_fh, '<', $indent_result or die "No Vim indentation output: $!";
+    my @indent_lines = <$indent_fh>;
+    close $indent_fh;
+    chomp @indent_lines;
+    is_deeply(\@indent_lines, [
+        'java:4:4:4:1', 'perl:4:4:4:1',
+        'javascript:2:2:2:1', 'javascriptreact:2:2:2:1',
+        'typescript:2:2:2:1', 'typescriptreact:2:2:2:1',
+        'css:2:2:2:1', 'xml:2:2:2:1', 'html:2:2:2:1', 'xhtml:2:2:2:1', 'yaml:2:2:2:1',
+    ], 'Vim applies four-space Java/Perl and two-space web/YAML indentation');
+    open my $clipboard_state_fh, '<', $clipboard_state or die "No Vim clipboard state: $!";
+    my @clipboard_state_lines = <$clipboard_state_fh>;
+    close $clipboard_state_fh;
+    chomp @clipboard_state_lines;
+    is($clipboard_state_lines[2], $clipboard_state_lines[0] eq '1' && $clipboard_state_lines[1] eq '1' ? 'autoselectplus' : '',
+        'tmux Visual selection copying does not alias the unnamed yank register');
+    is_deeply([@clipboard_state_lines[3..6]], ['"+yy', '"+y', '"+p', '<C-R>+'],
+        'Ctrl-C/Ctrl-V maps copy and paste using the host clipboard');
     open my $result_fh, '<', $result or die "No Vim clipboard output: $!";
     my @lines = <$result_fh>;
     close $result_fh;
     chomp @lines;
     is_deeply(\@lines, ['first line', 'second line', 'first line'],
         'yy followed by p yanks and pastes a line inside tmux');
+
+    SKIP: {
+        my $tmux = `command -v tmux 2>/dev/null`;
+        chomp $tmux;
+        my $vim_features = `$vim --version 2>/dev/null`;
+        skip 'mouse copy/paste integration requires tmux and Vim +clipboard_provider', 3
+            unless $tmux && $vim_features =~ /\+clipboard_provider/;
+        my $copy_file = File::Spec->catfile($clipboard_home, 'mouse-copy.txt');
+        my $mouse_file = File::Spec->catfile($clipboard_home, 'mouse-selection.txt');
+        my $mouse_script = File::Spec->catfile($clipboard_home, 'mouse-clipboard.vim');
+        open my $mouse_source, '>', $mouse_file or die "Cannot write mouse clipboard fixture: $!";
+        print {$mouse_source} "alpha\nbeta\n";
+        close $mouse_source;
+        open my $mouse_vim, '>', $mouse_script or die "Cannot write mouse clipboard Vim script: $!";
+        print {$mouse_vim} "function! VimToolsTestCopy(reg, type, lines) abort\n";
+        print {$mouse_vim} "  call writefile(a:lines, " . vim_string($copy_file) . ")\nendfunction\n";
+        print {$mouse_vim} "function! VimToolsTestPaste(reg) abort\n";
+        print {$mouse_vim} "  return ['v', readfile(" . vim_string($copy_file) . ")]\nendfunction\n";
+        print {$mouse_vim} "let v:clipproviders['vimtools_test'] = {'copy': {'+': function('VimToolsTestCopy')}, 'paste': {'+': function('VimToolsTestPaste')}}\n";
+        print {$mouse_vim} "set mouse=a clipboard=autoselectplus clipmethod=vimtools_test\n";
+        print {$mouse_vim} "execute 'source ' . fnameescape(" . vim_string(abs_path(File::Spec->catfile('assets', 'vim', 'after', 'plugin', 'clipboard.vim'))) . ")\n";
+        close $mouse_vim;
+        my $session = "vim-clipboard-$$";
+        my $mouse_status = system($tmux, 'new-session', '-d', '-s', $session, '-x', '100', '-y', '30',
+            $vim, '-Nu', 'NONE', '-n', '-i', 'NONE', $mouse_file, '-S', $mouse_script);
+        is($mouse_status, 0, 'clipboard shortcut integration starts in a Vim terminal');
+        if ($mouse_status != 0) {
+            skip 'Vim clipboard integration session could not start', 2;
+        } else {
+            select undef, undef, undef, 1;
+            system($tmux, 'send-keys', '-t', "$session:0.0", 'v', 'l', 'C-c', 'j', 'C-v');
+            select undef, undef, undef, 0.5;
+            system($tmux, 'send-keys', '-t', "$session:0.0", 'Escape', ':wq', 'Enter');
+            for (1 .. 20) {
+                last if system("$tmux has-session -t $session >/dev/null 2>&1") != 0;
+                select undef, undef, undef, 0.1;
+            }
+            open my $copied, '<', $copy_file or die "Visual Ctrl-C did not write to the clipboard provider: $!";
+            my @copied = <$copied>;
+            close $copied;
+            is_deeply(\@copied, ["al\n"], 'Ctrl-C copies a mouse-style Visual selection');
+            open my $mouse_result, '<', $mouse_file or die "Cannot read mouse copy/paste fixture: $!";
+            my @mouse_lines = <$mouse_result>;
+            close $mouse_result;
+            chomp @mouse_lines;
+            is_deeply(\@mouse_lines, ['alpha', 'baleta'], 'Ctrl-V pastes the selected text at the cursor');
+            system("$tmux kill-session -t $session >/dev/null 2>&1");
+        }
+    }
 }
 open my $navigation_asset, '<', File::Spec->catfile('assets', 'vim', 'after', 'plugin', 'java-tools.vim') or die $!;
 my $navigation = do { local $/; <$navigation_asset> };
@@ -110,6 +192,7 @@ close $config;
 my $installer = Vim::Tools::Java::Installer->new(root => '.', home => $tmp, vimrc => $config_path);
 $installer->_install_assets;
 ok(-f File::Spec->catfile($tmp, '.vim', 'after', 'plugin', 'ai-tools.vim'), 'AI Vim plugin asset is installed');
+ok(-f File::Spec->catfile($tmp, '.vim', 'after', 'plugin', 'clipboard.vim'), 'clipboard shortcuts are installed');
 ok(-f File::Spec->catfile($tmp, '.vim', 'perl5', 'Vim', 'Tools', 'Java', 'Jdk.pm'), 'renamed Java modules are installed under the new namespace');
 ok(-f File::Spec->catfile($tmp, '.vim', 'perl5', 'Vim', 'Tools', 'Perl', 'ModuleLookup.pm'), 'renamed Perl helpers are installed under the new namespace');
 $installer->_write_vimrc($vimrc);

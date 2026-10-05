@@ -82,7 +82,17 @@ dependencies from `cpanfile`, then run `PERL5OPT=-MDevel::Cover prove -Ilib t`
 and `cover -report html_basic -coverage statement -select_re '^(lib/Vim/Tools/|assets/vim/bin/java-project\.pl$)'`.
 Coverage data is written to `cover_db/`.
 
-## Keys and commands
+## Indentation, clipboard, and keys
+
+Java and Perl buffers use four-space indentation. JavaScript, TypeScript, CSS,
+XML, HTML, XHTML, and YAML buffers use two spaces. Vim expands the Tab key to
+spaces in these filetypes.
+
+Vim enables mouse support. Visual selections copy to the host clipboard when
+the Vim build supports it. `Ctrl-C` copies the current line or selection, and
+`Ctrl-V` pastes from the host clipboard. In tmux, ordinary `yy`/`p` use Vim's
+local register while mouse selections and `Ctrl-C`/`Ctrl-V` use the `+`
+clipboard register.
 
 Space is the leader key.
 
@@ -99,11 +109,6 @@ Space is the leader key.
 | `<leader>cv` | Display covered lines from the module's JaCoCo XML report |
 | `F5` | Start Java application debugging when Vimspector support is installed |
 | `:W`, `:X` | Command-line shortcuts: refuse on Coc errors; write and test / write and quit |
-
-With Vim's clipboard support enabled, mouse/Visual selections and normal
-yank/put operations use the host clipboard outside tmux. Inside tmux, Vim uses
-its normal yank register so `yy` and `p` stay consistent; use `"+yy` or `"+p`
-to copy to or paste from the host clipboard explicitly.
 
 ## AI assistant
 
