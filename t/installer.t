@@ -17,7 +17,7 @@ my $vimrc = render_vimrc(
 like($vimrc, qr/" >>> vim-tools-java BEGIN/, 'managed config block has a start marker');
 like($vimrc, qr/" <<< vim-tools-java END/, 'managed config block has an end marker');
 like($vimrc, qr/Plug 'neoclide\/coc\.nvim', \{'branch': 'release'\}/, 'classic Vim coc plugin is declared');
-like($vimrc, qr/clipboard=unnamedplus,autoselect/, 'mouse and Visual selections use the host clipboard');
+like($vimrc, qr/if empty\(\$TMUX\).*clipboard=unnamedplus,autoselect.*set clipboard=/s, 'host clipboard is used outside tmux and Vim keeps local registers in tmux');
 open my $navigation_asset, '<', File::Spec->catfile('assets', 'vim', 'after', 'plugin', 'java-tools.vim') or die $!;
 my $navigation = do { local $/; <$navigation_asset> };
 close $navigation_asset;

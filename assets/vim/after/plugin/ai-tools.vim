@@ -49,7 +49,14 @@ endfunction
 function! s:AutoComplete(timer) abort
   let s:auto_timer = -1
   if s:JobRunning()
-    let s:auto_rerun = 1
+    let l:request_matches = bufnr('%') == get(s:request, 'buffer', -1)
+          \ && line('.') == get(s:request, 'line', -1)
+          \ && col('.') == get(s:request, 'column', -1)
+          \ && b:changedtick == get(s:request, 'changedtick', -1)
+          \ && strpart(getline('.'), 0, col('.') - 1) ==# get(s:request, 'prefix', '')
+    if get(s:request, 'kind', '') !=# 'auto_complete' || !l:request_matches
+      let s:auto_rerun = 1
+    endif
     return
   elseif mode() =~# '^i'
     call s:StartCompletion('auto_complete')
@@ -446,8 +453,7 @@ call s:MapTab()
 
 augroup vim_tools_ai_completion
   autocmd!
-  autocmd TextChangedI,InsertCharPre * call <SID>ClearGhost() | call <SID>ScheduleCompletion()
-  autocmd InsertEnter,CursorMovedI * call <SID>ClearGhost() | call <SID>ScheduleCompletion()
+  autocmd TextChangedI,CursorMovedI * call <SID>ClearGhost() | call <SID>ScheduleCompletion()
   autocmd InsertLeave,BufLeave * call <SID>StopAutoTimer() | call <SID>ClearGhost()
   " Providers such as Codeium remap Tab from their VimEnter handler.
   autocmd VimEnter * call <SID>MapTab()

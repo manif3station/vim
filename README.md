@@ -101,7 +101,9 @@ Space is the leader key.
 | `:W`, `:X` | Command-line shortcuts: refuse on Coc errors; write and test / write and quit |
 
 With Vim's clipboard support enabled, mouse/Visual selections and normal
-yank/put operations use the host clipboard.
+yank/put operations use the host clipboard outside tmux. Inside tmux, Vim uses
+its normal yank register so `yy` and `p` stay consistent; use `"+yy` or `"+p`
+to copy to or paste from the host clipboard explicitly.
 
 ## AI assistant
 
