@@ -26,6 +26,10 @@ open my $release, '>', File::Spec->catfile($jdk8, 'release') or die $!;
 print {$release} "JAVA_VERSION=\"1.8.0_402\"\n";
 close $release;
 is(version_from_release($jdk8), 8, 'release metadata identifies Java 8');
+open $release, '>', File::Spec->catfile($jdk8, 'release') or die $!;
+print {$release} "JAVA_VERSION=unknown\n";
+close $release;
+is(version_from_release($jdk8), undef, 'release metadata without a Java version is ignored');
 my $sdkman8 = File::Spec->catdir($tmp, '.sdkman', 'candidates', 'java', '8.0.999-test');
 make_path(File::Spec->catdir($sdkman8, 'bin'));
 open my $sdkjava, '>', File::Spec->catfile($sdkman8, 'bin', 'java') or die $!;
@@ -59,5 +63,10 @@ my $settings = runtime_settings($jdks);
 is($settings->[0]{name}, 'JavaSE-1.8', 'runtime settings include Java 8');
 ok($settings->[0]{default}, 'Java 8 is the default when available, matching hov1');
 ok(!$settings->[1]{default}, 'other JDK is not marked default');
+my $latest_settings = runtime_settings([
+    { major => 11, home => '/jdk/11' },
+    { major => 21, home => '/jdk/21' },
+]);
+ok($latest_settings->[1]{default}, 'highest available JDK is the default when Java 8 is absent');
 
 done_testing;

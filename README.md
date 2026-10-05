@@ -74,6 +74,14 @@ Vim plugin and helper modules into `.vim/after/plugin`, `.vim/bin`, and
 `.vim/coc-data`. It then runs vim-plug and installs `coc-java`, plus
 `coc-java-debug` when debugger prerequisites are available.
 
+## Development and tests
+
+Run the full suite from this directory with `prove -Ilib t`; run one test with
+`prove -Ilib t/ai_tools.t`. For Perl statement coverage, install test
+dependencies from `cpanfile`, then run `PERL5OPT=-MDevel::Cover prove -Ilib t`
+and `cover -report html_basic -coverage statement -select_re '^(lib/Vim/Tools/|assets/vim/bin/java-project\.pl$)'`.
+Coverage data is written to `cover_db/`.
+
 ## Keys and commands
 
 Space is the leader key.

@@ -2,7 +2,9 @@ use strict;
 use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
+use File::Path qw(make_path);
 use File::Spec;
+use Cwd qw(abs_path);
 use Vim::Tools::Java::Installer;
 use lib 'lib';
 use Vim::Tools::Java::Installer qw(render_vimrc);
@@ -98,4 +100,122 @@ my $broken_installer = Vim::Tools::Java::Installer->new(root => '.', home => $tm
 my $ok = eval { $broken_installer->_write_vimrc($vimrc); 1 };
 ok(!$ok && $@ =~ /Incomplete vim-tools-java markers/, 'incomplete managed blocks fail without replacing user config');
 
+my $tool_home = tempdir(CLEANUP => 1);
+my $tool_bin = File::Spec->catdir($tool_home, 'bin');
+make_path($tool_bin);
+write_executable(File::Spec->catfile($tool_bin, 'vim'), <<'SH');
+#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'VIM - Vi IMproved 9.2 +python3\n'
+fi
+if [ -n "$VIM_TEST_LOG" ]; then printf '%s\n' "$*" >> "$VIM_TEST_LOG"; fi
+exit 0
+SH
+write_executable(File::Spec->catfile($tool_bin, 'node'), "#!/bin/sh\nprintf 'v22.15.0\n'\n");
+write_executable(File::Spec->catfile($tool_bin, 'python3'), "#!/bin/sh\nprintf 'Python 3.12.1\n'\n");
+write_executable(File::Spec->catfile($tool_bin, 'git'), "#!/bin/sh\nexit 0\n");
+write_executable(File::Spec->catfile($tool_bin, 'copilot'), "#!/bin/sh\nexit 0\n");
+write_executable(File::Spec->catfile($tool_bin, 'curl'), <<'SH');
+#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    printf 'vim-plug test fixture\n' > "$1"
+  fi
+  shift
+done
+SH
+
+my $full_home = File::Spec->catdir($tool_home, 'home');
+mkdir $full_home or die "Cannot create fake installer home: $!";
+my $full_installer = Vim::Tools::Java::Installer->new(
+    root => '.', home => $full_home,
+    env => { PATH => $tool_bin, HOME => $full_home },
+);
+my $vim_test_log = File::Spec->catfile($tool_home, 'vim-commands.txt');
+my ($dry_plan, $full_plan);
+{
+    local $ENV{VIM_TEST_LOG} = $vim_test_log;
+    $dry_plan = $full_installer->run(dry_run => 1, show_config => 1);
+    $full_plan = $full_installer->run;
+}
+is($dry_plan->{ai_provider}, 'copilot', 'installer dry-run selects the configured AI provider');
+is($dry_plan->{ai_cli}, File::Spec->catfile($tool_bin, 'copilot'), 'installer locates the selected AI CLI');
+is($dry_plan->{debugger}, 1, 'installer enables debugging when Python host support is available');
+is_deeply($dry_plan->{missing}, [], 'installer reports no missing prerequisites for a complete toolchain');
+like($dry_plan->{vimrc_block}, qr/vim_tools_ai_provider = 'copilot'/, 'dry-run can include the generated managed config');
+
+is($full_plan->{ai_provider}, 'copilot', 'installer returns its selected provider after installation');
+ok(-s File::Spec->catfile($full_home, '.vim', 'autoload', 'plug.vim'), 'installer downloads vim-plug when absent');
+ok(-f File::Spec->catfile($full_home, '.vim', 'after', 'plugin', 'ai-tools.vim'), 'installer installs AI completion during a full setup');
+open my $vim_log_fh, '<', $vim_test_log or die $!;
+my $vim_commands = do { local $/; <$vim_log_fh> };
+close $vim_log_fh;
+like($vim_commands, qr/CocInstall -sync coc-java coc-java-debug/, 'installer requests Java debug Coc extension when Python support is available');
+
+ok(!Vim::Tools::Java::Installer::_python3_10(File::Spec->catdir($tool_home, 'missing-bin')), 'Python host check returns false when Python is unavailable');
+my $old_python_bin = File::Spec->catdir($tool_home, 'old-python');
+make_path($old_python_bin);
+write_executable(File::Spec->catfile($old_python_bin, 'python3'), "#!/bin/sh\nprintf 'Python 3.9.18\\n'\n");
+ok(!Vim::Tools::Java::Installer::_python3_10($old_python_bin), 'Python host check rejects versions before 3.10');
+is(Vim::Tools::Java::Installer::_version_ge('v22.15.0', 22, 15, 0), 1, 'version comparison accepts equal minimum versions');
+is(Vim::Tools::Java::Installer::_version_ge('v23.0.0', 22, 15, 0), 1, 'version comparison accepts a higher major');
+is(Vim::Tools::Java::Installer::_version_ge('v21.99.0', 22, 15, 0), 0, 'version comparison rejects a lower major');
+is(Vim::Tools::Java::Installer::_version_ge('v22.16.0', 22, 15, 0), 1, 'version comparison accepts a higher minor');
+is(Vim::Tools::Java::Installer::_version_ge('v22.14.9', 22, 15, 0), 0, 'version comparison rejects a lower minor');
+is(Vim::Tools::Java::Installer::_version_ge('not-a-version', 22, 15, 0), 0, 'version comparison rejects unparseable values');
+is(Vim::Tools::Java::Installer::_find_executable('absent-tool', $tool_bin), undef, 'executable lookup returns undef when no match exists');
+is(Vim::Tools::Java::Installer::_capture(File::Spec->catfile($tool_bin, 'node'), '--version'), "v22.15.0\n", 'capture reads successful command output');
+is(Vim::Tools::Java::Installer::_capture('/usr/bin/false'), undef, 'capture returns undef when a command fails');
+is(Vim::Tools::Java::Installer::_run(File::Spec->catfile($tool_bin, 'git')), 0, 'run returns a successful command status');
+my $checked_ok = eval { Vim::Tools::Java::Installer::_run_checked(File::Spec->catfile($tool_bin, 'git')); 1 };
+ok($checked_ok, 'checked run accepts a successful command');
+my $checked_fail = eval { Vim::Tools::Java::Installer::_run_checked('/usr/bin/false'); 1 };
+ok(!$checked_fail && $@ =~ /Command failed/, 'checked run reports a failed command');
+
+my $jdk_home = File::Spec->catdir($tool_home, 'jdk-17');
+make_path(File::Spec->catdir($jdk_home, 'bin'));
+write_executable(File::Spec->catfile($jdk_home, 'bin', 'java'), "#!/bin/sh\nexit 0\n");
+my $jdk21_home = File::Spec->catdir($tool_home, 'jdk-21');
+make_path(File::Spec->catdir($jdk21_home, 'bin'));
+write_executable(File::Spec->catfile($jdk21_home, 'bin', 'java'), "#!/bin/sh\nexit 0\n");
+my $jdk_plan = $full_installer->run(dry_run => 1, jdk => ["17=$jdk_home", "21=$jdk21_home"]);
+is($jdk_plan->{jdks}[0]{major}, 17, 'installer accepts a valid explicit JDK');
+is($jdk_plan->{jdks}[0]{home}, abs_path($jdk_home), 'explicit JDK replaces the detected path for that Java version');
+is_deeply([map { $_->{major} } @{ $jdk_plan->{jdks} }], [17, 21], 'installer sorts multiple explicitly configured JDKs');
+for my $case (
+    [['invalid'], qr/Invalid --jdk/, 'rejects malformed explicit JDK specifications'],
+    [['17=/missing'], qr/No executable Java found/, 'rejects explicit JDK paths without Java'],
+) {
+    my $accepted = eval { $full_installer->run(dry_run => 1, jdk => $case->[0]); 1 };
+    ok(!$accepted && $@ =~ $case->[1], $case->[2]);
+}
+
+my $wget_bin = File::Spec->catdir($tool_home, 'wget-bin');
+make_path($wget_bin);
+write_executable(File::Spec->catfile($wget_bin, 'wget'), "#!/bin/sh\nwhile [ \"\$#\" -gt 0 ]; do if [ \"\$1\" = \"-O\" ]; then shift; printf 'vim-plug from wget\\n' > \"\$1\"; fi; shift; done\n");
+my $wget_installer = Vim::Tools::Java::Installer->new(root => '.', home => $tool_home, env => { PATH => $wget_bin });
+my $wget_plug = File::Spec->catfile($tool_home, 'wget-vim', 'plug.vim');
+$wget_installer->_ensure_plug($wget_plug);
+ok(-s $wget_plug, 'installer downloads vim-plug with wget when curl is unavailable');
+$wget_installer->_ensure_plug($wget_plug);
+ok(-s $wget_plug, 'installer reuses an existing vim-plug file');
+my $empty_curl_bin = File::Spec->catdir($tool_home, 'empty-curl-bin');
+make_path($empty_curl_bin);
+write_executable(File::Spec->catfile($empty_curl_bin, 'curl'), "#!/bin/sh\nexit 0\n");
+my $empty_installer = Vim::Tools::Java::Installer->new(root => '.', home => $tool_home, env => { PATH => $empty_curl_bin });
+my $empty_download = eval { $empty_installer->_ensure_plug(File::Spec->catfile($tool_home, 'empty-vim', 'plug.vim')); 1 };
+ok(!$empty_download && $@ =~ /download returned an empty file/, 'installer rejects an empty vim-plug download');
+my $no_fetch_installer = Vim::Tools::Java::Installer->new(root => '.', home => $tool_home, env => { PATH => '' });
+my $no_fetch = eval { $no_fetch_installer->_ensure_plug(File::Spec->catfile($tool_home, 'no-fetch', 'plug.vim')); 1 };
+ok(!$no_fetch && $@ =~ /curl or wget is required/, 'installer reports when neither downloader is available');
+
 done_testing;
+
+sub write_executable {
+    my ($path, $contents) = @_;
+    open my $fh, '>', $path or die "Cannot create $path: $!";
+    print {$fh} $contents;
+    close $fh;
+    chmod 0755, $path or die "Cannot mark $path executable: $!";
+}

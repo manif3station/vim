@@ -52,8 +52,7 @@ sub run {
         defined $major or die "Cannot interpret Java version in '$spec'.\n";
         my $java = File::Spec->catfile($path, 'bin', $self->{windows} ? 'java.exe' : 'java');
         -x $java or die "No executable Java found at '$java'.\n";
-        @$jdks = grep { $_->{major} != $major } @$jdks;
-        push @$jdks, { major => $major, home => abs_path($path) || $path };
+        _replace_jdk($jdks, $major, $path);
     }
     @$jdks = sort { $a->{major} <=> $b->{major} } @$jdks;
 
@@ -321,6 +320,13 @@ sub _ensure_plug {
     } else { die "curl or wget is required to download vim-plug.\n" }
     -s $tmp or die "vim-plug download returned an empty file.\n";
     rename($tmp, $path) or die "Cannot move vim-plug into place: $!\n";
+}
+
+sub _replace_jdk {
+    my ($jdks, $major, $path) = @_;
+    @$jdks = grep { $_->{major} != $major } @$jdks;
+    my $home = abs_path($path) || $path;
+    push @$jdks, { major => $major, home => $home };
 }
 
 sub _write_vimrc {

@@ -89,11 +89,15 @@ PERL
     my $args_capture = File::Spec->catfile($tmp, "$provider-args.txt");
     my $ghost = File::Spec->catfile($tmp, "$provider-ghost.txt");
     my $dismissed = File::Spec->catfile($tmp, "$provider-dismissed.txt");
+    my $accepted = File::Spec->catfile($tmp, "$provider-accepted.txt");
     my $script = File::Spec->catfile($tmp, "$provider-test.vim");
     my $log = File::Spec->catfile($tmp, "$provider-vim.log");
     open my $vimscript, '>', $script or die "Cannot write Vim script: $!";
     print {$vimscript} "let g:vim_tools_ai_provider = '$provider'\n";
     print {$vimscript} "source $plugin\n";
+    print {$vimscript} "function! VimToolsTestLateTab() abort\n  return 'LATE-TAB-FALLBACK'\nendfunction\n";
+    print {$vimscript} "inoremap <silent><expr> <Tab> VimToolsTestLateTab()\ndoautocmd VimEnter\n";
+    print {$vimscript} "call writefile([string(maparg('<Tab>', 'i', 0, 1)), VimToolsAIAcceptTab()], '$tmp/$provider-tab.txt')\n";
     print {$vimscript} "execute 'lcd ' . fnameescape(" . vim_quote($workspace) . ")\n";
     print {$vimscript} "execute 'edit ' . fnameescape(" . vim_quote(File::Spec->catfile($workspace, 'current.pl')) . ")\n";
     print {$vimscript} "call setline(1, ['old source', 'old extra'])\nsetfiletype perl\n";
@@ -115,10 +119,12 @@ PERL
     print {$vimscript} "call writefile([expand('%:p'), getline(102)], '$result')\n";
     print {$vimscript} "call writefile([v:errmsg], '$tmp/$provider-errmsg.txt')\n";
     print {$vimscript} "call writefile([string(g:timers_before), string(g:timers_after)], '$tmp/$provider-timers.txt')\n";
-    print {$vimscript} "if has('patch-9.2.0000')\n";
+    print {$vimscript} "if has('patch-9.0.0185')\n";
     print {$vimscript} "  let g:show_fn = matchstr(execute('function /ShowSuggestion'), '<SNR>\\d\\+_ShowSuggestion')\n";
     print {$vimscript} "  execute 'call ' . g:show_fn . '(' . string('inline suggestion') . ')'\n";
-    print {$vimscript} "  call writefile([string(prop_list(102))], '$ghost')\nAIDismiss\n";
+    print {$vimscript} "  call writefile([string(prop_list(102))], '$ghost')\n";
+    print {$vimscript} "  let g:accept_keys = VimToolsAIAcceptTab()\n";
+    print {$vimscript} "  call writefile([string(g:accept_keys), VimToolsAIQueuedSuggestion(), string(prop_list(102))], '$accepted')\nAIDismiss\n";
     print {$vimscript} "  call writefile([string(prop_list(102))], '$dismissed')\nendif\n";
     print {$vimscript} "qa!\n";
     close $vimscript;
@@ -137,6 +143,11 @@ PERL
         diag($details);
     }
     is($status, 0, "$provider CLI request runs inside Vim");
+    open my $tab_fh, '<', "$tmp/$provider-tab.txt" or die "No Tab mapping result for $provider: $!";
+    my @tab_result = <$tab_fh>;
+    close $tab_fh;
+    like($tab_result[0], qr/VimToolsAIAcceptTab\(\)/, "$provider Tab mapping is restored after later plugin mappings");
+    is($tab_result[1], "LATE-TAB-FALLBACK\n", "$provider Tab mapping preserves the later plugin fallback");
     for my $case ([generation => $generated], [completion => $result]) {
         open my $output, '<', $case->[1] or die "No Vim output for $provider: $!";
         my @lines = <$output>;
@@ -184,11 +195,17 @@ PERL
     } else {
         like($args, qr/--permission-mode\nplan/, 'Claude workspace access remains in plan mode');
     }
-    if (-f $ghost && -f $dismissed) {
+    if (-f $ghost && -f $dismissed && -f $accepted) {
         open my $ghost_fh, '<', $ghost or die $!;
         my $ghost_props = do { local $/; <$ghost_fh> // '' };
         close $ghost_fh;
         like($ghost_props, qr/inline suggestion/, "$provider suggestion is rendered as Vim virtual text");
+        open my $accepted_fh, '<', $accepted or die $!;
+        my @accepted_result = <$accepted_fh>;
+        close $accepted_fh;
+        like($accepted_result[0], qr/VimToolsAIQueuedSuggestion\(\)/, "$provider Tab acceptance queues the ghost text for insertion");
+        is($accepted_result[1], "inline suggestion\n", "$provider Tab acceptance retains the exact suggestion");
+        is($accepted_result[2], "[]\n", "$provider Tab acceptance clears the ghost property");
         open my $dismissed_fh, '<', $dismissed or die $!;
         my $dismissed_props = do { local $/; <$dismissed_fh> // '' };
         close $dismissed_fh;

@@ -17,6 +17,11 @@ is(ai_provider(root => $root, env => {}), 'codex', 'provider is read from projec
 is(ai_provider(root => $root, env => { VIM_AI_WITH => 'claude' }), 'claude', 'environment value overrides .env');
 
 open $env, '>', $env_file or die "Cannot rewrite test .env: $!";
+print {$env} "VIM_AI_WITH=\"CoDeX\" # quoted selection\n";
+close $env;
+is(ai_provider(root => $root, env => {}), 'codex', 'quoted provider names are normalized');
+
+open $env, '>', $env_file or die "Cannot rewrite test .env: $!";
 print {$env} "VIM_AI_WITH=gemini\n";
 close $env;
 my $ok = eval { ai_provider(root => $root, env => {}); 1 };

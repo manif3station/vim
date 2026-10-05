@@ -11,6 +11,7 @@ use Vim::Tools::Perl::ModuleLookup qw(module_at_position resolve_module);
 my $module = module_at_position(line => 'use Foo::Bar qw(run);', column => 8);
 is($module, 'Foo::Bar', 'finds a module name under cursor in use statement');
 is(module_at_position(line => 'require Local/Thing.pm;', column => 14), 'Local/Thing.pm', 'finds slash module in require');
+is(module_at_position(line => 'use Foo::Bar;', column => 1), undef, 'returns no module when cursor is outside its name');
 
 my $dir = tempdir(CLEANUP => 1);
 make_path("$dir/lib/Foo", "$dir/inc/Baz");
@@ -21,5 +22,6 @@ close $inc;
 is(resolve_module(module => 'Foo::Bar', cwd => $dir, inc => ["$dir/inc"]), abs_path("$dir/lib/Foo/Bar.pm"), 'project lib takes precedence over @INC');
 is(resolve_module(module => 'Baz::Thing', cwd => $dir, inc => ["$dir/inc"]), abs_path("$dir/inc/Baz/Thing.pm"), 'resolves modules on supplied @INC');
 is(resolve_module(module => '../outside', cwd => $dir, inc => []), undef, 'rejects path traversal and invalid module names');
+is(resolve_module(module => 'Missing::Module', cwd => $dir, inc => []), undef, 'returns no path when a valid module cannot be found');
 
 done_testing;

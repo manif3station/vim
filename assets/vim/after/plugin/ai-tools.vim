@@ -449,4 +449,6 @@ augroup vim_tools_ai_completion
   autocmd TextChangedI,InsertCharPre * call <SID>ClearGhost() | call <SID>ScheduleCompletion()
   autocmd InsertEnter,CursorMovedI * call <SID>ClearGhost() | call <SID>ScheduleCompletion()
   autocmd InsertLeave,BufLeave * call <SID>StopAutoTimer() | call <SID>ClearGhost()
+  " Providers such as Codeium remap Tab from their VimEnter handler.
+  autocmd VimEnter * call <SID>MapTab()
 augroup END
