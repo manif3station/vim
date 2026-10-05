@@ -24,7 +24,7 @@ like($vimrc, qr/set showmode showtabline=2 mouse=a laststatus=2 hlsearch/, 'sear
 SKIP: {
     my $vim = `command -v vim 2>/dev/null`;
     chomp $vim;
-    skip 'Vim editor settings integration requires classic Vim on Unix-like systems', 10
+    skip 'Vim editor settings integration requires classic Vim on Unix-like systems', 11
         unless $vim && $^O ne 'MSWin32';
     my ($clipboard_config) = $vimrc =~ /(^if has\('clipboard'\)\n.*?^endif$)/ms;
     ok(defined $clipboard_config, 'installer renders a complete clipboard configuration block');
@@ -43,6 +43,7 @@ SKIP: {
     open my $script_fh, '>', $script or die "Cannot write Vim clipboard fixture: $!";
     print {$script_fh} "if has('clipboard') | set clipboard=unnamedplus | endif\n";
     print {$script_fh} "$clipboard_config\n$search_config\n";
+    print {$script_fh} "let mapleader = ' '\n";
     print {$script_fh} "filetype plugin indent on\n$indent_config\n";
     print {$script_fh} "source $clipboard_plugin\n";
     print {$script_fh} "let g:indent_results = []\n";
@@ -50,7 +51,7 @@ SKIP: {
     print {$script_fh} "  setlocal filetype=\n  execute 'setfiletype ' . ft\n";
     print {$script_fh} "  call add(g:indent_results, printf('%s:%d:%d:%d:%d', &l:filetype, &l:tabstop, &l:shiftwidth, &l:softtabstop, &l:expandtab))\nendfor\n";
     print {$script_fh} "call writefile(g:indent_results, " . vim_string($indent_result) . ")\n";
-    print {$script_fh} "call writefile([string(has('clipboard')), string(has('patch-9.1.0000')), &clipboard, maparg('<C-c>', 'n'), maparg('<C-c>', 'x'), maparg('<C-v>', 'n'), maparg('<C-v>', 'i'), string(&hlsearch)], " . vim_string($clipboard_state) . ")\n";
+    print {$script_fh} "call writefile([string(has('clipboard')), string(has('patch-9.1.0000')), &clipboard, maparg('<C-c>', 'n'), maparg('<C-c>', 'x'), maparg('<C-v>', 'n'), maparg('<C-v>', 'x'), maparg('<C-v>', 'i'), maparg('<C-v>', 'c'), maparg('<leader>p', 'n'), maparg('<leader>p', 'x'), maparg('<leader>p', 'i'), string(&hlsearch)], " . vim_string($clipboard_state) . ")\n";
     print {$script_fh} "call setline(1, ['first line', 'second line'])\n";
     print {$script_fh} "normal! gg\nnormal! yy\nnormal! j\nnormal! p\n";
     print {$script_fh} "call writefile(getline(1, '\$'), " . vim_string($result) . ")\n";
@@ -80,9 +81,13 @@ SKIP: {
     chomp @clipboard_state_lines;
     is($clipboard_state_lines[2], $clipboard_state_lines[0] eq '1' && $clipboard_state_lines[1] eq '1' ? 'autoselectplus' : '',
         'tmux Visual selection copying does not alias the unnamed yank register');
-    is_deeply([@clipboard_state_lines[3..6]], ['"+yy', '"+y', '"+p', '<C-R>+'],
-        'Ctrl-C/Ctrl-V maps copy and paste using the host clipboard');
-    is($clipboard_state_lines[7], '1', 'Vim keeps search matches highlighted while navigating with n and N');
+    is_deeply([@clipboard_state_lines[3..4]], ['"+yy', '"+y'],
+        'Ctrl-C copies the current line or Visual selection to the host clipboard');
+    is_deeply([@clipboard_state_lines[5..8]], ['', '', '', ''],
+        'Ctrl-V is not remapped in any mode, preserving Vim blockwise Visual selection');
+    is_deeply([@clipboard_state_lines[9..11]], ['"+p', '"+P', '<C-R>+'],
+        'leader-p pastes using the host clipboard in Normal, Visual, and Insert modes');
+    is($clipboard_state_lines[12], '1', 'Vim keeps search matches highlighted while navigating with n and N');
     open my $search_fh, '<', $search_result or die "No Vim search output: $!";
     my @search_lines = <$search_fh>;
     close $search_fh;
@@ -99,10 +104,11 @@ SKIP: {
         my $tmux = `command -v tmux 2>/dev/null`;
         chomp $tmux;
         my $vim_features = `$vim --version 2>/dev/null`;
-        skip 'mouse copy/paste integration requires tmux and Vim +clipboard_provider', 3
+        skip 'mouse copy/paste integration requires tmux and Vim +clipboard_provider', 4
             unless $tmux && $vim_features =~ /\+clipboard_provider/;
         my $copy_file = File::Spec->catfile($clipboard_home, 'mouse-copy.txt');
         my $mouse_file = File::Spec->catfile($clipboard_home, 'mouse-selection.txt');
+        my $visual_mode_file = File::Spec->catfile($clipboard_home, 'visual-mode.txt');
         my $mouse_script = File::Spec->catfile($clipboard_home, 'mouse-clipboard.vim');
         open my $mouse_source, '>', $mouse_file or die "Cannot write mouse clipboard fixture: $!";
         print {$mouse_source} "alpha\nbeta\n";
@@ -112,6 +118,7 @@ SKIP: {
         print {$mouse_vim} "  call writefile(a:lines, " . vim_string($copy_file) . ")\nendfunction\n";
         print {$mouse_vim} "function! VimToolsTestPaste(reg) abort\n";
         print {$mouse_vim} "  return ['v', readfile(" . vim_string($copy_file) . ")]\nendfunction\n";
+        print {$mouse_vim} "autocmd VimLeavePre * call writefile([string(visualmode() ==# \"\\<C-v>\")], " . vim_string($visual_mode_file) . ")\n";
         print {$mouse_vim} "let v:clipproviders['vimtools_test'] = {'copy': {'+': function('VimToolsTestCopy')}, 'paste': {'+': function('VimToolsTestPaste')}}\n";
         print {$mouse_vim} "set mouse=a clipboard=autoselectplus clipmethod=vimtools_test\n";
         print {$mouse_vim} "execute 'source ' . fnameescape(" . vim_string(abs_path(File::Spec->catfile('assets', 'vim', 'after', 'plugin', 'clipboard.vim'))) . ")\n";
@@ -124,7 +131,7 @@ SKIP: {
             skip 'Vim clipboard integration session could not start', 2;
         } else {
             select undef, undef, undef, 1;
-            system($tmux, 'send-keys', '-t', "$session:0.0", 'v', 'l', 'C-c', 'j', 'C-v');
+            system($tmux, 'send-keys', '-t', "$session:0.0", 'v', 'l', 'C-c', 'j', 'Home', 'Space', 'p', 'Escape', 'C-v', 'l', 'Escape');
             select undef, undef, undef, 0.5;
             system($tmux, 'send-keys', '-t', "$session:0.0", 'Escape', ':wq', 'Enter');
             for (1 .. 20) {
@@ -139,7 +146,12 @@ SKIP: {
             my @mouse_lines = <$mouse_result>;
             close $mouse_result;
             chomp @mouse_lines;
-            is_deeply(\@mouse_lines, ['alpha', 'baleta'], 'Ctrl-V pastes the selected text at the cursor');
+            is_deeply(\@mouse_lines, ['alpha', 'bealta'], 'leader-p pastes the selected text at the cursor');
+            open my $visual_mode, '<', $visual_mode_file or die "Ctrl-V did not leave a Visual selection mode result: $!";
+            my @visual_mode_lines = <$visual_mode>;
+            close $visual_mode;
+            chomp @visual_mode_lines;
+            is_deeply(\@visual_mode_lines, ['1'], 'Ctrl-V starts Vim blockwise Visual selection');
             system("$tmux kill-session -t $session >/dev/null 2>&1");
         }
     }
