@@ -18,6 +18,39 @@ like($vimrc, qr/" >>> vim-tools-java BEGIN/, 'managed config block has a start m
 like($vimrc, qr/" <<< vim-tools-java END/, 'managed config block has an end marker');
 like($vimrc, qr/Plug 'neoclide\/coc\.nvim', \{'branch': 'release'\}/, 'classic Vim coc plugin is declared');
 like($vimrc, qr/if empty\(\$TMUX\).*clipboard=unnamedplus,autoselect.*set clipboard=/s, 'host clipboard is used outside tmux and Vim keeps local registers in tmux');
+SKIP: {
+    my $vim = `command -v vim 2>/dev/null`;
+    chomp $vim;
+    skip 'Vim register integration requires classic Vim on Unix-like systems', 3
+        unless $vim && $^O ne 'MSWin32';
+    my ($clipboard_config) = $vimrc =~ /(^if has\('clipboard'\)\n.*?^endif$)/ms;
+    ok(defined $clipboard_config, 'installer renders a complete clipboard configuration block');
+    my $clipboard_home = tempdir(CLEANUP => 1);
+    my $script = File::Spec->catfile($clipboard_home, 'clipboard.vim');
+    my $result = File::Spec->catfile($clipboard_home, 'clipboard-result.txt');
+    my $vim_log = File::Spec->catfile($clipboard_home, 'clipboard-vim.log');
+    open my $script_fh, '>', $script or die "Cannot write Vim clipboard fixture: $!";
+    print {$script_fh} "if has('clipboard') | set clipboard=unnamedplus | endif\n";
+    print {$script_fh} "$clipboard_config\n";
+    print {$script_fh} "call setline(1, ['first line', 'second line'])\n";
+    print {$script_fh} "normal! gg\nnormal! yy\nnormal! j\nnormal! p\n";
+    print {$script_fh} "call writefile(getline(1, '\$'), " . vim_string($result) . ")\nqa!\n";
+    close $script_fh;
+    local $ENV{TMUX} = 'vim-test-session';
+    my $status = system($vim, '-Nu', 'NONE', '-n', '-i', 'NONE', '-es', "-V1$vim_log", '-S', $script);
+    if ($status != 0 && -f $vim_log) {
+        open my $log_fh, '<', $vim_log or die "Cannot read Vim clipboard log: $!";
+        diag(do { local $/; <$log_fh> // '' });
+        close $log_fh;
+    }
+    is($status, 0, 'Vim executes the generated clipboard configuration in tmux mode');
+    open my $result_fh, '<', $result or die "No Vim clipboard output: $!";
+    my @lines = <$result_fh>;
+    close $result_fh;
+    chomp @lines;
+    is_deeply(\@lines, ['first line', 'second line', 'first line'],
+        'yy followed by p yanks and pastes a line inside tmux');
+}
 open my $navigation_asset, '<', File::Spec->catfile('assets', 'vim', 'after', 'plugin', 'java-tools.vim') or die $!;
 my $navigation = do { local $/; <$navigation_asset> };
 close $navigation_asset;
@@ -218,4 +251,11 @@ sub write_executable {
     print {$fh} $contents;
     close $fh;
     chmod 0755, $path or die "Cannot mark $path executable: $!";
+}
+
+sub vim_string {
+    my ($value) = @_;
+    $value =~ s/\\/\\\\/g;
+    $value =~ s/'/''/g;
+    return "'$value'";
 }

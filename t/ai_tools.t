@@ -211,6 +211,15 @@ PERL
         close $dismissed_fh;
         is($dismissed_props, "[]\n", "$provider virtual suggestion clears cleanly");
     }
+
+    test_automatic_completion(
+        vim => $vim,
+        provider => $provider,
+        expected => $expected{$provider},
+        plugin => $plugin,
+        tmp => $tmp,
+        bin => $bin,
+    );
 }
 
 done_testing;
@@ -220,4 +229,98 @@ sub vim_quote {
     $value =~ s/\\/\\\\/g;
     $value =~ s/'/''/g;
     return "'$value'";
+}
+
+sub test_automatic_completion {
+    my (%args) = @_;
+    my $tmux = `command -v tmux 2>/dev/null`;
+    chomp $tmux;
+    if (!$tmux) {
+        skip 'automatic insert-mode integration requires tmux', 5;
+        return;
+    }
+
+    my $provider = $args{provider};
+    my $name = "vim-ai-auto-$$-$provider";
+    my $file = File::Spec->catfile($args{tmp}, "$provider-auto.pl");
+    my $prompt_file = File::Spec->catfile($args{tmp}, "$provider-auto-prompt.txt");
+    my $cwd_file = File::Spec->catfile($args{tmp}, "$provider-auto-cwd.txt");
+    my $args_file = File::Spec->catfile($args{tmp}, "$provider-auto-args.txt");
+    open my $source, '>', $file or die "Cannot create auto-completion fixture: $!";
+    print {$source} "sub automatic {\n\n}\n";
+    close $source;
+
+    my @command = (
+        '/usr/bin/env',
+        "PATH=$args{bin}:$ENV{PATH}",
+        "VIM_AI_TEST_PROVIDER=$provider",
+        "VIM_AI_TEST_PROMPT=$prompt_file",
+        "VIM_AI_TEST_CWD=$cwd_file",
+        "VIM_AI_TEST_ARGS=$args_file",
+        "VIM_AI_TEST_REPLY=$args{expected}",
+        $args{vim}, '-Nu', 'NONE', '-n', '-i', 'NONE', $file,
+        '-c', "let g:vim_tools_ai_provider='$provider'",
+        '-c', "source $args{plugin}",
+        '-c', 'setfiletype perl',
+        '-c', 'normal! 2G$',
+        '-c', 'startinsert',
+    );
+    my $start_status = system($tmux, 'new-session', '-d', '-s', $name, '-x', '100', '-y', '30', @command);
+    is($start_status, 0, "$provider insert-mode Vim session starts in tmux");
+    if ($start_status != 0) {
+        skip "$provider tmux session could not start", 4;
+        return;
+    }
+
+    select undef, undef, undef, 1.5;
+    ok(!-e $prompt_file, "$provider does not request completion just on InsertEnter");
+    my $target = "$name:0.0";
+    system($tmux, 'send-keys', '-t', $target, '-l', 'return ');
+
+    my $pane = '';
+    for (1 .. 50) {
+        select undef, undef, undef, 0.1;
+        $pane = capture_tmux_pane($tmux, $target);
+        last if $pane =~ /\Q$args{expected}\E/;
+    }
+    like($pane, qr/\Q$args{expected}\E/, "$provider displays an automatic suggestion after typing");
+
+    system($tmux, 'send-keys', '-t', $target, 'Tab');
+    select undef, undef, undef, 0.2;
+    system($tmux, 'send-keys', '-t', $target, 'Escape', ':wq', 'Enter');
+    for (1 .. 30) {
+        last unless tmux_session_exists($tmux, $name);
+        select undef, undef, undef, 0.1;
+    }
+    my @contents = -f $file ? do {
+        open my $result, '<', $file or die "Cannot read auto-completion fixture: $!";
+        my @lines = <$result>;
+        close $result;
+        chomp @lines;
+        @lines;
+    } : ();
+    is($contents[1], "return $args{expected}", "$provider Tab accepts the automatic suggestion");
+
+    if (-f $prompt_file) {
+        open my $prompt, '<', $prompt_file or die "Cannot read auto-completion prompt: $!";
+        my $text = do { local $/; <$prompt> // '' };
+        close $prompt;
+        like($text, qr/return\s+<<<CURSOR>>>/, "$provider autocomplete prompt includes text typed in Insert mode");
+    } else {
+        fail "$provider autocomplete prompt includes text typed in Insert mode";
+    }
+    system($tmux, 'kill-session', '-t', $name) if tmux_session_exists($tmux, $name);
+}
+
+sub capture_tmux_pane {
+    my ($tmux, $target) = @_;
+    open my $capture, '-|', $tmux, 'capture-pane', '-p', '-t', $target or die "Cannot capture tmux pane: $!";
+    my $text = do { local $/; <$capture> // '' };
+    close $capture;
+    return $text;
+}
+
+sub tmux_session_exists {
+    my ($tmux, $name) = @_;
+    return system("$tmux has-session -t $name >/dev/null 2>&1") == 0;
 }
