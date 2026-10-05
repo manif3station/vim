@@ -20,25 +20,29 @@ like($vimrc, qr/Plug 'neoclide\/coc\.nvim', \{'branch': 'release'\}/, 'classic V
 like($vimrc, qr/if empty\(\$TMUX\).*clipboard=unnamedplus,autoselect.*clipboard=autoselectplus.*set clipboard=/s, 'Vim copies Visual selections to the host in tmux without aliasing yy/p');
 like($vimrc, qr/autocmd FileType java,perl setlocal expandtab tabstop=4 shiftwidth=4 softtabstop=4/, 'Java and Perl use four spaces');
 like($vimrc, qr/autocmd FileType javascript,javascriptreact,typescript,typescriptreact,css,xml,html,xhtml,yaml setlocal expandtab tabstop=2 shiftwidth=2 softtabstop=2/, 'JavaScript, CSS, XML, HTML, and YAML use two spaces');
+like($vimrc, qr/set showmode showtabline=2 mouse=a laststatus=2 hlsearch/, 'search results remain highlighted after pressing n or N');
 SKIP: {
     my $vim = `command -v vim 2>/dev/null`;
     chomp $vim;
-    skip 'Vim editor settings integration requires classic Vim on Unix-like systems', 7
+    skip 'Vim editor settings integration requires classic Vim on Unix-like systems', 10
         unless $vim && $^O ne 'MSWin32';
     my ($clipboard_config) = $vimrc =~ /(^if has\('clipboard'\)\n.*?^endif$)/ms;
     ok(defined $clipboard_config, 'installer renders a complete clipboard configuration block');
+    my ($search_config) = $vimrc =~ /^(set showmode showtabline=2 mouse=a laststatus=2 hlsearch)$/m;
+    ok(defined $search_config, 'installer renders persistent search highlighting');
     my ($indent_config) = $vimrc =~ /(augroup vim_tools_indentation\n.*?augroup END)/s;
     ok(defined $indent_config, 'installer renders filetype-specific indentation rules');
     my $clipboard_home = tempdir(CLEANUP => 1);
     my $script = File::Spec->catfile($clipboard_home, 'clipboard.vim');
     my $result = File::Spec->catfile($clipboard_home, 'clipboard-result.txt');
     my $clipboard_state = File::Spec->catfile($clipboard_home, 'clipboard-state.txt');
+    my $search_result = File::Spec->catfile($clipboard_home, 'search-result.txt');
     my $indent_result = File::Spec->catfile($clipboard_home, 'indent-result.txt');
     my $vim_log = File::Spec->catfile($clipboard_home, 'clipboard-vim.log');
     my $clipboard_plugin = abs_path(File::Spec->catfile('assets', 'vim', 'after', 'plugin', 'clipboard.vim'));
     open my $script_fh, '>', $script or die "Cannot write Vim clipboard fixture: $!";
     print {$script_fh} "if has('clipboard') | set clipboard=unnamedplus | endif\n";
-    print {$script_fh} "$clipboard_config\n";
+    print {$script_fh} "$clipboard_config\n$search_config\n";
     print {$script_fh} "filetype plugin indent on\n$indent_config\n";
     print {$script_fh} "source $clipboard_plugin\n";
     print {$script_fh} "let g:indent_results = []\n";
@@ -46,10 +50,11 @@ SKIP: {
     print {$script_fh} "  setlocal filetype=\n  execute 'setfiletype ' . ft\n";
     print {$script_fh} "  call add(g:indent_results, printf('%s:%d:%d:%d:%d', &l:filetype, &l:tabstop, &l:shiftwidth, &l:softtabstop, &l:expandtab))\nendfor\n";
     print {$script_fh} "call writefile(g:indent_results, " . vim_string($indent_result) . ")\n";
-    print {$script_fh} "call writefile([string(has('clipboard')), string(has('patch-9.1.0000')), &clipboard, maparg('<C-c>', 'n'), maparg('<C-c>', 'x'), maparg('<C-v>', 'n'), maparg('<C-v>', 'i')], " . vim_string($clipboard_state) . ")\n";
+    print {$script_fh} "call writefile([string(has('clipboard')), string(has('patch-9.1.0000')), &clipboard, maparg('<C-c>', 'n'), maparg('<C-c>', 'x'), maparg('<C-v>', 'n'), maparg('<C-v>', 'i'), string(&hlsearch)], " . vim_string($clipboard_state) . ")\n";
     print {$script_fh} "call setline(1, ['first line', 'second line'])\n";
     print {$script_fh} "normal! gg\nnormal! yy\nnormal! j\nnormal! p\n";
-    print {$script_fh} "call writefile(getline(1, '\$'), " . vim_string($result) . ")\nqa!\n";
+    print {$script_fh} "call writefile(getline(1, '\$'), " . vim_string($result) . ")\n";
+    print {$script_fh} "normal! gg\n/line\nnormal! n\ncall writefile([string(&hlsearch), string(line('.'))], " . vim_string($search_result) . ")\nqa!\n";
     close $script_fh;
     local $ENV{TMUX} = 'vim-test-session';
     my $status = system($vim, '-Nu', 'NONE', '-n', '-i', 'NONE', '-es', "-V1$vim_log", '-S', $script);
@@ -77,6 +82,12 @@ SKIP: {
         'tmux Visual selection copying does not alias the unnamed yank register');
     is_deeply([@clipboard_state_lines[3..6]], ['"+yy', '"+y', '"+p', '<C-R>+'],
         'Ctrl-C/Ctrl-V maps copy and paste using the host clipboard');
+    is($clipboard_state_lines[7], '1', 'Vim keeps search matches highlighted while navigating with n and N');
+    open my $search_fh, '<', $search_result or die "No Vim search output: $!";
+    my @search_lines = <$search_fh>;
+    close $search_fh;
+    chomp @search_lines;
+    is_deeply(\@search_lines, ['1', '2'], 'slash search followed by n advances to the next highlighted match');
     open my $result_fh, '<', $result or die "No Vim clipboard output: $!";
     my @lines = <$result_fh>;
     close $result_fh;

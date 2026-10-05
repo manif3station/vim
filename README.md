@@ -94,6 +94,9 @@ the Vim build supports it. `Ctrl-C` copies the current line or selection, and
 local register while mouse selections and `Ctrl-C`/`Ctrl-V` use the `+`
 clipboard register.
 
+Search matches stay highlighted after `/` or `?` searches and while moving
+between matches with `n` or `N`.
+
 Space is the leader key.
 
 | Key/command | Action |

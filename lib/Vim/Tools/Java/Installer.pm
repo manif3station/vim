@@ -124,7 +124,7 @@ sub render_vimrc {
 " >>> vim-tools-java BEGIN
 set nocompatible hidden number signcolumn=yes cursorline colorcolumn=80
 set splitright splitbelow scrolloff=4 sidescrolloff=8 updatetime=250 timeoutlen=400
-set showmode showtabline=2 mouse=a laststatus=2
+set showmode showtabline=2 mouse=a laststatus=2 hlsearch
 if has('termguicolors') | set termguicolors | endif
 if has('clipboard')
   if empty($TMUX)
