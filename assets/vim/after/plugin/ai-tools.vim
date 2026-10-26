@@ -177,6 +177,12 @@ function! s:FMCompletionLooksUseful(text, prefix) abort
   if empty(a:text) || a:text =~# '[+*/=-]\s*$'
     return 0
   endif
+  if a:text =~? '<\{1,3}\s*CURSOR\s*>\{1,3}'
+    return 0
+  endif
+  if a:prefix =~# '_$' && a:text !~# '^\h'
+    return 0
+  endif
   if a:prefix =~# '=\s*$' && a:text =~# '^\s*[$@%]\h\w*\s*='
     return 0
   endif
@@ -204,33 +210,6 @@ function! s:FMCompletionLooksUseful(text, prefix) abort
     endfor
   endif
   return 1
-endfunction
-
-function! s:FMKnownCompletion(prefix) abort
-  if &filetype !=# 'perl' || line('.') < 2
-        \ || !empty(strpart(getline('.'), col('.') - 1))
-    return ''
-  endif
-  if a:prefix =~# '^\s*my\s\+\$now\s*=\s*$'
-    for l:source_line in getline(1, line('.') - 1)
-      if l:source_line =~# '^\s*use\s\+DateTime\s*;'
-        return 'DateTime->now();'
-      endif
-    endfor
-  endif
-  if a:prefix =~# '^\s*my\s\+\$\%(count\|\h\w*_count\)\s*=\s*$'
-    let l:arrays = []
-    for l:source_line in getline(max([1, line('.') - 10]), line('.') - 1)
-      let l:match = matchlist(l:source_line, '^\s*my\s\+@\(\h\w*\)\>')
-      if !empty(l:match) && index(l:arrays, l:match[1]) < 0
-        call add(l:arrays, l:match[1])
-      endif
-    endfor
-    if len(l:arrays) == 1
-      return 'scalar @' . l:arrays[0] . ';'
-    endif
-  endif
-  return ''
 endfunction
 
 function! s:StripRepeatedPrefix(response, prefix) abort
@@ -323,18 +302,6 @@ function! s:AIExit(job, status) abort
           \ ? s:FMIdentifierCompletion(l:response, get(s:request, 'prefix', ''), l:fragment,
           \     get(s:request, 'candidates', []))
           \ : s:StripRepeatedPrefix(l:response, get(s:request, 'prefix', ''))
-    if get(s:request, 'filetype', '') ==# 'perl'
-          \ && get(s:request, 'prefix', '') =~# '^\s*my\s\+\$\%(count\|\h\w*_count\)\s*=\s*$'
-          \ && empty(get(s:request, 'suffix', ''))
-          \ && l:response =~# '^scalar\s\+@\h\w*$'
-      let l:response .= ';'
-    endif
-    if get(s:request, 'filetype', '') ==# 'java'
-          \ && get(s:request, 'prefix', '') =~# '^\s*System\.out\.$'
-          \ && empty(get(s:request, 'suffix', ''))
-          \ && l:response =~# '^\%(print\|println\|printf\)(.\+)$'
-      let l:response .= ';'
-    endif
     if !s:FMCompletionLooksUseful(l:response, get(s:request, 'prefix', ''))
       let l:response = ''
     endif
@@ -412,7 +379,6 @@ function! s:Start(prompt, kind) abort
   let s:request = {
         \ 'kind': a:kind, 'output': '', 'error': '', 'buffer': bufnr('%'),
         \ 'line': line('.'), 'column': col('.'), 'prefix': strpart(getline('.'), 0, col('.') - 1),
-        \ 'suffix': strpart(getline('.'), col('.') - 1), 'filetype': &filetype,
         \ 'workspace': getcwd(),
         \ 'changedtick': b:changedtick,
         \ 'startline': get(s:, 'generate_start', line('.')),
@@ -584,19 +550,6 @@ function! s:StartCompletion(kind) abort
   endif
   let l:prefix = strpart(getline('.'), 0, col('.') - 1)
   let l:fragment = matchstr(l:prefix, '\h\w*$')
-  if s:provider ==# 'fm'
-    let l:known = s:FMKnownCompletion(l:prefix)
-    if !empty(l:known)
-      let s:request = {'kind': a:kind, 'buffer': bufnr('%'), 'line': line('.'),
-            \ 'column': col('.'), 'prefix': l:prefix, 'pending': l:known}
-      if mode() =~# '^i'
-        call s:ShowSuggestion(l:known)
-      else
-        echom 'AI suggestion is ready; use :AIAccept to insert it.'
-      endif
-      return
-    endif
-  endif
   let l:instruction = s:provider ==# 'fm'
         \ ? 'Complete the current code. Return only the missing suffix. Use nearby code and imports. Finish the current line first; include more lines only for an opened block.'
         \ : 'Complete the code at the cursor using only the supplied in-memory context. Do not call tools, run commands, or modify files. Keep the completion concise and syntactically consistent.'

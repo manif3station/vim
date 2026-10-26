@@ -151,10 +151,9 @@ For `fm`, the prompt includes nearby imports, the previous 10 lines, the
 incomplete line, and the next 10 lines. It keeps the current line last and
 limits surrounding text for the on-device model. The next lines are context
 only; unrelated or incomplete guesses are hidden.
-When Perl imports `DateTime`, the clear `my $now =` case suggests
-`DateTime->now();` immediately. A count assignment with one nearby array
-suggests `scalar @array;` immediately. Completions that start an unrelated
-statement after an equals sign are discarded.
+Completions that repeat the cursor marker or start an unrelated statement
+after an equals sign are discarded. Completion selection uses the configured
+model and general validation rules, without language-specific hardcoded guesses.
 For `fm`, Vim starts one localhost `fm serve` process per Vim session and reuses
 its API for completions. Vim stops that process on exit. Continuous typing
 resets the 1.2 second timer, and at most one completion request runs at a time.
