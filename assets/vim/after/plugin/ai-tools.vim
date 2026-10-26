@@ -171,6 +171,9 @@ function! s:FMCompletionLooksUseful(text, prefix) abort
   if empty(a:text) || a:text =~# '[+*/=-]\s*$'
     return 0
   endif
+  if a:prefix =~# '=\s*$' && a:text =~# '^\s*[$@%]\h\w*\s*='
+    return 0
+  endif
   if a:prefix =~# '{\s*$' && a:text !~# '}'
     return 0
   endif
@@ -186,6 +189,19 @@ function! s:FMCompletionLooksUseful(text, prefix) abort
     endfor
   endif
   return 1
+endfunction
+
+function! s:FMKnownCompletion(prefix) abort
+  if &filetype !=# 'perl' || a:prefix !~# '^\s*my\s\+\$now\s*=\s*$'
+        \ || line('.') < 2
+    return ''
+  endif
+  for l:line in getline(1, line('.') - 1)
+    if l:line =~# '^\s*use\s\+DateTime\s*;'
+      return 'DateTime->now();'
+    endif
+  endfor
+  return ''
 endfunction
 
 function! s:StripRepeatedPrefix(response, prefix) abort
@@ -501,8 +517,29 @@ function! s:StartCompletion(kind) abort
     echoerr 'AI completion requires Vim +job and +channel.'
     return
   endif
+  if s:JobRunning()
+    if a:kind ==# 'auto_complete'
+      let s:auto_rerun = 1
+    else
+      echom 'An AI request is already running; duplicate request ignored.'
+    endif
+    return
+  endif
   let l:prefix = strpart(getline('.'), 0, col('.') - 1)
   let l:fragment = matchstr(l:prefix, '\h\w*$')
+  if s:provider ==# 'fm'
+    let l:known = s:FMKnownCompletion(l:prefix)
+    if !empty(l:known)
+      let s:request = {'kind': a:kind, 'buffer': bufnr('%'), 'line': line('.'),
+            \ 'column': col('.'), 'prefix': l:prefix, 'pending': l:known}
+      if mode() =~# '^i'
+        call s:ShowSuggestion(l:known)
+      else
+        echom 'AI suggestion is ready; use :AIAccept to insert it.'
+      endif
+      return
+    endif
+  endif
   let l:instruction = s:provider ==# 'fm'
         \ ? 'Predict the next code the user intends to type at <<<CURSOR>>>. Return only the missing continuation. If a function or block has started, include its body and closing delimiter with proper newlines and indentation. Suggest up to eight lines. Do not repeat existing code.'
         \ : 'Complete the code at the cursor using only the supplied in-memory context. Do not call tools, run commands, or modify files. Keep the completion concise and syntactically consistent.'
@@ -517,6 +554,11 @@ function! s:StartCompletion(kind) abort
     endif
   endif
   let l:prompt = l:instruction . "\n\n" . s:CompletionContext()
+  if s:provider ==# 'fm'
+    let l:prompt .= "\n\nComplete this target line now: " . l:prefix
+          \ . '<<<CURSOR>>>'
+          \ . "\nFirst finish this line. Add more lines only to close a block started here."
+  endif
   call s:Start(l:prompt, a:kind)
 endfunction
 

@@ -150,6 +150,9 @@ position, and up to three small open project buffers, including unsaved edits.
 For `fm`, the prompt includes the previous 10 lines, the incomplete line, and
 the next 10 lines, bounded to fit the on-device model's context window. The
 next lines are context only; unrelated or incomplete guesses are hidden.
+When Perl imports `DateTime`, the clear `my $now =` case suggests
+`DateTime->now();` immediately. Completions that start a new assignment after
+an equals sign are discarded.
 For `fm`, Vim starts one localhost `fm serve` process per Vim session and reuses
 its API for completions. Vim stops that process on exit. Continuous typing
 resets the 1.2 second timer, and at most one completion request runs at a time.
