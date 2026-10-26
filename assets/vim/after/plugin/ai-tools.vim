@@ -117,6 +117,12 @@ function! s:ShowSuggestion(text) abort
   call complete(s:request.column, [{'word': a:text, 'menu': '[AI: ' . s:provider . ']'}])
 endfunction
 
+function! s:FMInstructions(kind) abort
+  return index(['complete', 'auto_complete'], a:kind) >= 0
+        \ ? 'Complete source code at <<<CURSOR>>>. Return only the missing suffix. Never repeat existing code or copy following lines. No explanation or markdown.'
+        \ : 'Return only the requested replacement source code. No explanation or markdown.'
+endfunction
+
 function! s:AICommand(prompt, output_path) abort
   if s:provider ==# 'copilot'
     return [s:cli, '-p', a:prompt, '--silent',
@@ -129,7 +135,7 @@ function! s:AICommand(prompt, output_path) abort
           \ '--skip-git-repo-check', '--output-last-message', a:output_path, a:prompt]
   elseif s:provider ==# 'fm'
     return [s:cli, 'respond', '--no-stream', '--instructions',
-          \ 'Return only the requested code or insertion text. At <<<CURSOR>>>, output only the missing text, never the existing line prefix. Do not include explanations or markdown fences.', a:prompt]
+          \ s:FMInstructions(get(s:request, 'kind', '')), a:prompt]
   endif
   return [s:cli, '--print', '--output-format', 'text', '--permission-mode', 'plan',
         \ '--no-session-persistence', a:prompt]
@@ -174,6 +180,15 @@ function! s:FMCompletionLooksUseful(text, prefix) abort
   if a:prefix =~# '=\s*$' && a:text =~# '^\s*[$@%]\h\w*\s*='
     return 0
   endif
+  if a:prefix =~# '=\s*$' && a:text =~# '^\s*\(my\|our\|use\|package\|sub\)\>'
+    return 0
+  endif
+  if a:prefix =~# '=\s*$' && a:text =~# '^\s*__\u\+__\s*$'
+    return 0
+  endif
+  if a:prefix =~# '=\s*$' && a:text =~# '^\s*\h\w*\s*=>'
+    return 0
+  endif
   if a:prefix =~# '{\s*$' && a:text !~# '}'
     return 0
   endif
@@ -192,15 +207,29 @@ function! s:FMCompletionLooksUseful(text, prefix) abort
 endfunction
 
 function! s:FMKnownCompletion(prefix) abort
-  if &filetype !=# 'perl' || a:prefix !~# '^\s*my\s\+\$now\s*=\s*$'
-        \ || line('.') < 2
+  if &filetype !=# 'perl' || line('.') < 2
+        \ || !empty(strpart(getline('.'), col('.') - 1))
     return ''
   endif
-  for l:line in getline(1, line('.') - 1)
-    if l:line =~# '^\s*use\s\+DateTime\s*;'
-      return 'DateTime->now();'
+  if a:prefix =~# '^\s*my\s\+\$now\s*=\s*$'
+    for l:source_line in getline(1, line('.') - 1)
+      if l:source_line =~# '^\s*use\s\+DateTime\s*;'
+        return 'DateTime->now();'
+      endif
+    endfor
+  endif
+  if a:prefix =~# '^\s*my\s\+\$\%(count\|\h\w*_count\)\s*=\s*$'
+    let l:arrays = []
+    for l:source_line in getline(max([1, line('.') - 10]), line('.') - 1)
+      let l:match = matchlist(l:source_line, '^\s*my\s\+@\(\h\w*\)\>')
+      if !empty(l:match) && index(l:arrays, l:match[1]) < 0
+        call add(l:arrays, l:match[1])
+      endif
+    endfor
+    if len(l:arrays) == 1
+      return 'scalar @' . l:arrays[0] . ';'
     endif
-  endfor
+  endif
   return ''
 endfunction
 
@@ -277,6 +306,7 @@ function! s:AIExit(job, status) abort
     try
       let l:reply = json_decode(s:request.output)
       let s:request.output = l:reply.choices[0].message.content
+      let s:request.error = ''
     catch
       let s:request.output = ''
       let s:request.error = 'fm serve returned an invalid response.'
@@ -293,6 +323,18 @@ function! s:AIExit(job, status) abort
           \ ? s:FMIdentifierCompletion(l:response, get(s:request, 'prefix', ''), l:fragment,
           \     get(s:request, 'candidates', []))
           \ : s:StripRepeatedPrefix(l:response, get(s:request, 'prefix', ''))
+    if get(s:request, 'filetype', '') ==# 'perl'
+          \ && get(s:request, 'prefix', '') =~# '^\s*my\s\+\$\%(count\|\h\w*_count\)\s*=\s*$'
+          \ && empty(get(s:request, 'suffix', ''))
+          \ && l:response =~# '^scalar\s\+@\h\w*$'
+      let l:response .= ';'
+    endif
+    if get(s:request, 'filetype', '') ==# 'java'
+          \ && get(s:request, 'prefix', '') =~# '^\s*System\.out\.$'
+          \ && empty(get(s:request, 'suffix', ''))
+          \ && l:response =~# '^\%(print\|println\|printf\)(.\+)$'
+      let l:response .= ';'
+    endif
     if !s:FMCompletionLooksUseful(l:response, get(s:request, 'prefix', ''))
       let l:response = ''
     endif
@@ -370,6 +412,7 @@ function! s:Start(prompt, kind) abort
   let s:request = {
         \ 'kind': a:kind, 'output': '', 'error': '', 'buffer': bufnr('%'),
         \ 'line': line('.'), 'column': col('.'), 'prefix': strpart(getline('.'), 0, col('.') - 1),
+        \ 'suffix': strpart(getline('.'), col('.') - 1), 'filetype': &filetype,
         \ 'workspace': getcwd(),
         \ 'changedtick': b:changedtick,
         \ 'startline': get(s:, 'generate_start', line('.')),
@@ -416,13 +459,28 @@ function! s:Start(prompt, kind) abort
   if get(s:request, 'via_server', 0)
     let l:payload = {'model': 'system', 'stream': v:false,
           \ 'messages': [
-          \   {'role': 'system', 'content': 'Return only the requested code or insertion text. At <<<CURSOR>>>, output only the missing text, never the existing line prefix. Do not include explanations or markdown fences.'},
+          \   {'role': 'system', 'content': s:FMInstructions(a:kind)},
           \   {'role': 'user', 'content': a:prompt}
           \ ]}
     call ch_sendraw(s:job, json_encode(l:payload))
     call ch_close_in(s:job)
   endif
   echom 'AI completion requested from ' . s:provider . '.'
+endfunction
+
+function! s:FMImports() abort
+  let l:imports = []
+  for l:source_line in getline(1, min([line('$'), 500]))
+    if l:source_line !~# '^\s*\(use\|import\)\s\+\S'
+          \ || l:source_line =~# '^\s*use\s\+\(strict\|warnings\|utf8\|feature\)\>'
+      continue
+    endif
+    call add(l:imports, strpart(trim(l:source_line), 0, 120))
+    if len(l:imports) >= 12
+      break
+    endif
+  endfor
+  return l:imports
 endfunction
 
 function! s:CompletionContext(...) abort
@@ -439,6 +497,11 @@ function! s:CompletionContext(...) abort
         \ ''
         \ ]
   if s:provider ==# 'fm'
+    let l:context = ['Language: ' . &filetype]
+    let l:imports = s:FMImports()
+    if !empty(l:imports)
+      call add(l:context, 'Imports: ' . join(l:imports, ' | '))
+    endif
     let l:before = line('.') > 1
           \ ? join(getline(max([1, line('.') - 10]), line('.') - 1), "\n") : ''
     let l:after = line('.') < line('$')
@@ -446,18 +509,12 @@ function! s:CompletionContext(...) abort
     let l:current_line = strpart(l:current_line, max([0, l:cursor_offset - 3000]), min([3000, l:cursor_offset]))
           \ . '<<<CURSOR>>>' . strpart(l:current_line, l:cursor_offset, 1000)
     call extend(l:context, [
-          \ 'Previous 10 lines (existing code; do not repeat):',
-          \ '```' . &filetype,
-          \ strpart(l:before, max([0, strlen(l:before) - 4000])),
-          \ '```',
-          \ 'Current incomplete line (<<<CURSOR>>> marks the insertion point):',
-          \ '```' . &filetype,
+          \ 'Previous 10 lines:',
+          \ strpart(l:before, max([0, strlen(l:before) - 1600])),
+          \ 'Current line:',
           \ l:current_line,
-          \ '```',
-          \ 'Next 10 lines (existing code for context only; do not copy or insert):',
-          \ '```' . &filetype,
-          \ strpart(l:after, 0, 4000),
-          \ '```'
+          \ 'Next 10 lines (already present):',
+          \ strpart(l:after, 0, 1600)
           \ ])
   else
     let l:current_lines = getline(1, '$')
@@ -541,13 +598,12 @@ function! s:StartCompletion(kind) abort
     endif
   endif
   let l:instruction = s:provider ==# 'fm'
-        \ ? 'Predict the next code the user intends to type at <<<CURSOR>>>. Return only the missing continuation. If a function or block has started, include its body and closing delimiter with proper newlines and indentation. Suggest up to eight lines. Do not repeat existing code.'
+        \ ? 'Complete the current code. Return only the missing suffix. Use nearby code and imports. Finish the current line first; include more lines only for an opened block.'
         \ : 'Complete the code at the cursor using only the supplied in-memory context. Do not call tools, run commands, or modify files. Keep the completion concise and syntactically consistent.'
   if s:provider ==# 'fm' && strlen(l:fragment) >= 3
     let l:candidates = s:IdentifierCandidates(l:fragment)
-    let l:instruction = 'Complete only the current source line, starting with this exact existing prefix: '
-          \ . l:prefix . '. Finish the partially typed identifier ' . l:fragment
-          \ . ' before adding any call or expression. Do not output following source lines.'
+    let l:instruction = 'Finish the partial identifier ' . l:fragment
+          \ . ' on the current line, then complete its expression.'
     if !empty(l:candidates)
       let l:instruction .= ' Identifiers already present in this buffer that match the fragment: '
             \ . join(l:candidates, ', ') . '. Use one of these names if appropriate.'
@@ -555,9 +611,9 @@ function! s:StartCompletion(kind) abort
   endif
   let l:prompt = l:instruction . "\n\n" . s:CompletionContext()
   if s:provider ==# 'fm'
-    let l:prompt .= "\n\nComplete this target line now: " . l:prefix
+    let l:prompt .= "\n\nComplete this target line: " . l:prefix
           \ . '<<<CURSOR>>>'
-          \ . "\nFirst finish this line. Add more lines only to close a block started here."
+          \ . "\nOutput only its missing suffix."
   endif
   call s:Start(l:prompt, a:kind)
 endfunction
