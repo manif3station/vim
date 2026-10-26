@@ -133,11 +133,33 @@ endfunction
 
 function! s:CleanFMCompletion(text) abort
   let l:text = substitute(a:text, "\r", '', 'g')
-  if l:text =~# '^\s*```'
-    let l:text = substitute(l:text, '^\s*```[^\n]*\n', '', '')
-    let l:text = substitute(l:text, '\n```\s*$', '', '')
+  let l:lines = split(l:text, "\n", 1)
+  call filter(l:lines, 'v:val !~# ''^\s*```''')
+  while !empty(l:lines) && empty(l:lines[-1])
+    call remove(l:lines, -1)
+  endwhile
+  return join(l:lines, "\n")
+endfunction
+
+function! s:FMCompletionLooksUseful(text, prefix) abort
+  if empty(a:text) || a:text =~# '[+*/=-]\s*$'
+    return 0
   endif
-  return substitute(l:text, '\n\+$', '', '')
+  if a:prefix =~# '{\s*$' && a:text !~# '}'
+    return 0
+  endif
+  if a:prefix =~# '(\s*$' && a:text !~# ')'
+    return 0
+  endif
+  if line('.') < line('$')
+    let l:first = trim(get(split(a:text, "\n"), 0, ''))
+    for l:existing in getline(line('.') + 1, min([line('$'), line('.') + 10]))
+      if !empty(l:first) && l:first ==# trim(l:existing)
+        return 0
+      endif
+    endfor
+  endif
+  return 1
 endfunction
 
 function! s:StripRepeatedPrefix(response, prefix) abort
@@ -160,6 +182,48 @@ function! s:StripRepeatedPrefix(response, prefix) abort
   return strpart(a:response, l:best)
 endfunction
 
+function! s:IdentifierCandidates(fragment) abort
+  if strlen(a:fragment) < 3
+    return []
+  endif
+  let l:before = line('.') > 1
+        \ ? join(getline(max([1, line('.') - 80]), line('.') - 1), "\n") : ''
+  let l:before .= ' ' . strpart(getline('.'), 0, col('.') - 1 - strlen(a:fragment))
+  let l:candidates = []
+  for l:word in split(l:before, '\W\+')
+    if strlen(l:word) > strlen(a:fragment) && stridx(l:word, a:fragment) == 0
+          \ && index(l:candidates, l:word) < 0
+      call add(l:candidates, l:word)
+      if len(l:candidates) >= 8
+        break
+      endif
+    endif
+  endfor
+  return l:candidates
+endfunction
+
+function! s:FMIdentifierCompletion(response, prefix, fragment, candidates) abort
+  let l:trimmed_prefix = substitute(a:prefix, '^\s*', '', '')
+  for l:line in split(a:response, "\n")
+    let l:line = substitute(l:line, '^\s*', '', '')
+    let l:continuation = s:StripRepeatedPrefix(l:line, a:prefix)
+    if empty(l:continuation)
+      continue
+    endif
+    for l:candidate in a:candidates
+      let l:suffix = strpart(l:candidate, strlen(a:fragment))
+      if stridx(l:continuation, l:suffix) == 0
+        return l:continuation
+      endif
+    endfor
+    if empty(a:candidates) && (stridx(l:line, l:trimmed_prefix) == 0
+          \ || stridx(l:line, a:fragment) == 0)
+      return l:continuation
+    endif
+  endfor
+  return ''
+endfunction
+
 function! s:AIExit(job, status) abort
   if s:provider ==# 'codex' && !empty(get(s:request, 'output_path', ''))
     if filereadable(s:request.output_path)
@@ -171,16 +235,27 @@ function! s:AIExit(job, status) abort
         \ && index(['complete', 'auto_complete'], get(s:request, 'kind', '')) >= 0
   let l:response = l:fm_completion
         \ ? s:CleanFMCompletion(s:request.output) : s:CleanResponse(s:request.output)
+  let l:discarded = 0
   if l:fm_completion
-    let l:response = s:StripRepeatedPrefix(l:response, get(s:request, 'prefix', ''))
+    let l:fragment = get(s:request, 'fragment', '')
+    let l:response = strlen(l:fragment) >= 3
+          \ ? s:FMIdentifierCompletion(l:response, get(s:request, 'prefix', ''), l:fragment,
+          \     get(s:request, 'candidates', []))
+          \ : s:StripRepeatedPrefix(l:response, get(s:request, 'prefix', ''))
+    if !s:FMCompletionLooksUseful(l:response, get(s:request, 'prefix', ''))
+      let l:response = ''
+    endif
+    let l:discarded = empty(l:response) && a:status == 0
   endif
   if a:status != 0 || empty(l:response)
-    let l:message = empty(s:request.error)
-          \ ? printf('AI CLI exited with status %d and returned no completion.', a:status)
-          \ : substitute(s:request.error, '\n\+$', '', '')
-    echohl ErrorMsg
-    echom 'AI: ' . l:message
-    echohl None
+    if !l:discarded
+      let l:message = empty(s:request.error)
+            \ ? printf('AI CLI exited with status %d and returned no completion.', a:status)
+            \ : substitute(s:request.error, '\n\+$', '', '')
+      echohl ErrorMsg
+      echom 'AI: ' . l:message
+      echohl None
+    endif
     let s:job = 0
     if s:auto_rerun
       let s:auto_rerun = 0
@@ -249,6 +324,10 @@ function! s:Start(prompt, kind) abort
         \ 'startline': get(s:, 'generate_start', line('.')),
         \ 'endline': get(s:, 'generate_end', line('.'))
         \ }
+  if s:provider ==# 'fm' && index(['complete', 'auto_complete'], a:kind) >= 0
+    let s:request.fragment = matchstr(s:request.prefix, '\h\w*$')
+    let s:request.candidates = s:IdentifierCandidates(s:request.fragment)
+  endif
   let l:argv = []
   if s:provider ==# 'codex'
     let s:request.output_path = tempname()
@@ -275,22 +354,8 @@ function! s:Start(prompt, kind) abort
 endfunction
 
 function! s:CompletionContext(...) abort
-  let l:current_lines = getline(1, '$')
   let l:current_line = getline('.')
   let l:cursor_offset = col('.') - 1
-  if s:provider ==# 'fm'
-    let l:before = line('.') > 1
-          \ ? join(getline(max([1, line('.') - 80]), line('.') - 1), "\n") : ''
-    let l:after = line('.') < line('$')
-          \ ? join(getline(line('.') + 1, min([line('$'), line('.') + 40])), "\n") : ''
-    let l:current_line = strpart(l:current_line, max([0, l:cursor_offset - 3000]), min([3000, l:cursor_offset]))
-          \ . '<<<CURSOR>>>' . strpart(l:current_line, l:cursor_offset, 1000)
-    let l:current_lines = [strpart(l:before, max([0, strlen(l:before) - 6000]))
-          \ . "\n" . l:current_line . "\n" . strpart(l:after, 0, 3000)]
-  else
-    let l:current_lines[line('.') - 1] = strpart(l:current_line, 0, l:cursor_offset)
-          \ . '<<<CURSOR>>>' . strpart(l:current_line, l:cursor_offset)
-  endif
   let l:context = [
         \ 'Workspace directory: ' . getcwd(),
         \ 'Current file: ' . (empty(expand('%:p')) ? '[unnamed buffer]' : expand('%:p')),
@@ -299,14 +364,40 @@ function! s:CompletionContext(...) abort
         \ (a:0 && a:1 ==# 'assistant'
         \   ? 'Use this project context to answer the user request.'
         \   : 'Return only the text to insert at the cursor. Do not include explanations or markdown fences.'),
-        \ '',
-        \ (s:provider ==# 'fm'
-        \   ? 'Current buffer excerpt near the cursor (including unsaved changes; <<<CURSOR>>> marks the insertion point):'
-        \   : 'Current buffer snapshot (full in-memory file, including unsaved changes; <<<CURSOR>>> marks the insertion point):'),
-        \ '```' . &filetype,
-        \ join(l:current_lines, "\n"),
-        \ '```'
+        \ ''
         \ ]
+  if s:provider ==# 'fm'
+    let l:before = line('.') > 1
+          \ ? join(getline(max([1, line('.') - 10]), line('.') - 1), "\n") : ''
+    let l:after = line('.') < line('$')
+          \ ? join(getline(line('.') + 1, min([line('$'), line('.') + 10])), "\n") : ''
+    let l:current_line = strpart(l:current_line, max([0, l:cursor_offset - 3000]), min([3000, l:cursor_offset]))
+          \ . '<<<CURSOR>>>' . strpart(l:current_line, l:cursor_offset, 1000)
+    call extend(l:context, [
+          \ 'Previous 10 lines (existing code; do not repeat):',
+          \ '```' . &filetype,
+          \ strpart(l:before, max([0, strlen(l:before) - 4000])),
+          \ '```',
+          \ 'Current incomplete line (<<<CURSOR>>> marks the insertion point):',
+          \ '```' . &filetype,
+          \ l:current_line,
+          \ '```',
+          \ 'Next 10 lines (existing code for context only; do not copy or insert):',
+          \ '```' . &filetype,
+          \ strpart(l:after, 0, 4000),
+          \ '```'
+          \ ])
+  else
+    let l:current_lines = getline(1, '$')
+    let l:current_lines[line('.') - 1] = strpart(l:current_line, 0, l:cursor_offset)
+          \ . '<<<CURSOR>>>' . strpart(l:current_line, l:cursor_offset)
+    call extend(l:context, [
+          \ 'Current buffer snapshot (full in-memory file, including unsaved changes; <<<CURSOR>>> marks the insertion point):',
+          \ '```' . &filetype,
+          \ join(l:current_lines, "\n"),
+          \ '```'
+          \ ])
+  endif
 
   let l:other_buffers = []
   let l:workspace = fnamemodify(getcwd(), ':p')
@@ -354,9 +445,21 @@ function! s:StartCompletion(kind) abort
     echoerr 'AI completion requires Vim +job and +channel.'
     return
   endif
+  let l:prefix = strpart(getline('.'), 0, col('.') - 1)
+  let l:fragment = matchstr(l:prefix, '\h\w*$')
   let l:instruction = s:provider ==# 'fm'
         \ ? 'Predict the next code the user intends to type at <<<CURSOR>>>. Return only the missing continuation. If a function or block has started, include its body and closing delimiter with proper newlines and indentation. Suggest up to eight lines. Do not repeat existing code.'
         \ : 'Complete the code at the cursor using only the supplied in-memory context. Do not call tools, run commands, or modify files. Keep the completion concise and syntactically consistent.'
+  if s:provider ==# 'fm' && strlen(l:fragment) >= 3
+    let l:candidates = s:IdentifierCandidates(l:fragment)
+    let l:instruction = 'Complete only the current source line, starting with this exact existing prefix: '
+          \ . l:prefix . '. Finish the partially typed identifier ' . l:fragment
+          \ . ' before adding any call or expression. Do not output following source lines.'
+    if !empty(l:candidates)
+      let l:instruction .= ' Identifiers already present in this buffer that match the fragment: '
+            \ . join(l:candidates, ', ') . '. Use one of these names if appropriate.'
+    endif
+  endif
   let l:prompt = l:instruction . "\n\n" . s:CompletionContext()
   call s:Start(l:prompt, a:kind)
 endfunction
