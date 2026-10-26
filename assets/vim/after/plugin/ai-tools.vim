@@ -100,6 +100,9 @@ function! s:AICommand(prompt, output_path) abort
   elseif s:provider ==# 'codex'
     return [s:cli, 'exec', '--ephemeral', '--sandbox', 'read-only',
           \ '--skip-git-repo-check', '--output-last-message', a:output_path, a:prompt]
+  elseif s:provider ==# 'fm'
+    return [s:cli, 'respond', '--no-stream', '--instructions',
+          \ 'Return only the requested code or insertion text. At <<<CURSOR>>>, output only the missing text, never the existing line prefix. Do not include explanations or markdown fences.', a:prompt]
   endif
   return [s:cli, '--print', '--output-format', 'text', '--permission-mode', 'plan',
         \ '--no-session-persistence', a:prompt]
@@ -135,6 +138,15 @@ function! s:AIExit(job, status) abort
     call delete(s:request.output_path)
   endif
   let l:response = s:CleanResponse(s:request.output)
+  if s:provider ==# 'fm' && index(['complete', 'auto_complete'], get(s:request, 'kind', '')) >= 0
+    let l:prefix = get(s:request, 'prefix', '')
+    if stridx(l:response, l:prefix) != 0
+      let l:prefix = substitute(l:prefix, '^\s*', '', '')
+    endif
+    if !empty(l:prefix) && stridx(l:response, l:prefix) == 0
+      let l:response = strpart(l:response, strlen(l:prefix))
+    endif
+  endif
   if a:status != 0 || empty(l:response)
     let l:message = empty(s:request.error)
           \ ? printf('AI CLI exited with status %d and returned no completion.', a:status)
@@ -235,20 +247,35 @@ function! s:Start(prompt, kind) abort
   echom 'AI completion requested from ' . s:provider . '.'
 endfunction
 
-function! s:CompletionContext() abort
+function! s:CompletionContext(...) abort
   let l:current_lines = getline(1, '$')
   let l:current_line = getline('.')
   let l:cursor_offset = col('.') - 1
-  let l:current_lines[line('.') - 1] = strpart(l:current_line, 0, l:cursor_offset)
-        \ . '<<<CURSOR>>>' . strpart(l:current_line, l:cursor_offset)
+  if s:provider ==# 'fm'
+    let l:before = line('.') > 1
+          \ ? join(getline(max([1, line('.') - 80]), line('.') - 1), "\n") : ''
+    let l:after = line('.') < line('$')
+          \ ? join(getline(line('.') + 1, min([line('$'), line('.') + 40])), "\n") : ''
+    let l:current_line = strpart(l:current_line, max([0, l:cursor_offset - 3000]), min([3000, l:cursor_offset]))
+          \ . '<<<CURSOR>>>' . strpart(l:current_line, l:cursor_offset, 1000)
+    let l:current_lines = [strpart(l:before, max([0, strlen(l:before) - 6000]))
+          \ . "\n" . l:current_line . "\n" . strpart(l:after, 0, 3000)]
+  else
+    let l:current_lines[line('.') - 1] = strpart(l:current_line, 0, l:cursor_offset)
+          \ . '<<<CURSOR>>>' . strpart(l:current_line, l:cursor_offset)
+  endif
   let l:context = [
         \ 'Workspace directory: ' . getcwd(),
         \ 'Current file: ' . (empty(expand('%:p')) ? '[unnamed buffer]' : expand('%:p')),
         \ 'Filetype: ' . &filetype,
         \ 'Cursor position: line ' . line('.') . ', byte column ' . col('.'),
-        \ 'Return only the text to insert at the cursor. Do not include explanations or markdown fences.',
+        \ (a:0 && a:1 ==# 'assistant'
+        \   ? 'Use this project context to answer the user request.'
+        \   : 'Return only the text to insert at the cursor. Do not include explanations or markdown fences.'),
         \ '',
-        \ 'Current buffer snapshot (full in-memory file, including unsaved changes; <<<CURSOR>>> marks the insertion point):',
+        \ (s:provider ==# 'fm'
+        \   ? 'Current buffer excerpt near the cursor (including unsaved changes; <<<CURSOR>>> marks the insertion point):'
+        \   : 'Current buffer snapshot (full in-memory file, including unsaved changes; <<<CURSOR>>> marks the insertion point):'),
         \ '```' . &filetype,
         \ join(l:current_lines, "\n"),
         \ '```'
@@ -259,6 +286,9 @@ function! s:CompletionContext() abort
   let l:workspace_prefix = l:workspace =~# '[/\\]$' ? l:workspace : l:workspace . '/'
   let l:context_size = 0
   for l:buffer in getbufinfo()
+    if s:provider ==# 'fm'
+      break
+    endif
     if l:buffer.bufnr == bufnr('%') || !l:buffer.loaded
       continue
     endif
@@ -284,8 +314,10 @@ function! s:CompletionContext() abort
     endif
   endfor
   call add(l:context, '')
-  call add(l:context, 'Other open project buffers (up to 8 KB each, 16 KB total):')
-  call extend(l:context, empty(l:other_buffers) ? ['[No other loaded project buffers]'] : l:other_buffers)
+  if s:provider !=# 'fm'
+    call add(l:context, 'Other open project buffers (up to 8 KB each, 16 KB total):')
+    call extend(l:context, empty(l:other_buffers) ? ['[No other loaded project buffers]'] : l:other_buffers)
+  endif
   return join(l:context, "\n")
 endfunction
 
@@ -321,8 +353,9 @@ function! VimToolsAIGenerate(startline, endline, instruction) abort
 endfunction
 
 function! VimToolsAIStart(instruction) abort
-  let l:instruction = empty(a:instruction) ? input('Ask ' . s:provider . ': ') : a:instruction
-  if empty(l:instruction)
+  let l:instruction = empty(a:instruction) && s:provider !=# 'fm'
+        \ ? input('Ask ' . s:provider . ': ') : a:instruction
+  if empty(l:instruction) && s:provider !=# 'fm'
     return
   endif
   if !executable(s:cli)
@@ -330,12 +363,19 @@ function! VimToolsAIStart(instruction) abort
     return
   endif
   let l:context = 'Opened from Vim. Workspace directory: ' . getcwd()
-        \ . '. User request: ' . l:instruction . "\n\n" . s:CompletionContext()
-        \ . "\n\nInspect relevant workspace files and project instructions with read-only tools before responding. Do not run commands or modify files."
+        \ . '. User request: ' . l:instruction . "\n\n" . s:CompletionContext('assistant')
+  if s:provider !=# 'fm'
+    let l:context .= "\n\nInspect relevant workspace files and project instructions with read-only tools before responding. Do not run commands or modify files."
+  endif
   if s:provider ==# 'copilot'
     let l:argv = [s:cli, '--interactive', l:context]
   elseif s:provider ==# 'codex'
     let l:argv = [s:cli, l:context]
+  elseif s:provider ==# 'fm'
+    let l:argv = empty(l:instruction)
+          \ ? [s:cli, 'chat', '--instructions', l:context]
+          \ : [s:cli, 'respond', '--no-stream', '--instructions',
+          \    'Answer the user request using the supplied in-memory Vim context.', l:context]
   else
     let l:argv = [s:cli, l:context]
   endif

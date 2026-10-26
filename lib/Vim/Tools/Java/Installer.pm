@@ -65,6 +65,11 @@ sub run {
     push @missing, 'git' unless _find_executable($self->{windows} ? 'git.exe' : 'git', $self->{env}{PATH});
     push @missing, 'curl or wget' unless _find_executable($self->{windows} ? 'curl.exe' : 'curl', $self->{env}{PATH}) || _find_executable($self->{windows} ? 'wget.exe' : 'wget', $self->{env}{PATH});
     push @missing, "$ai_provider CLI" unless $ai_cli;
+    if ($ai_provider eq 'fm' && $ai_cli) {
+        my $availability = _capture($ai_cli, 'available');
+        push @missing, 'Apple Foundation Model availability (run fm available)'
+          unless defined $availability && $availability =~ /^System model available\s*$/m;
+    }
     die "Missing prerequisites: " . join(', ', @missing) . ".\n" if @missing && !$opts{dry_run};
 
     my $vimrc_block = render_vimrc(

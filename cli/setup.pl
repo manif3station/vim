@@ -65,7 +65,7 @@ any working directory; it locates its modules and assets relative to itself.
   --home PATH        Install into this user's home directory (also useful in tests)
   --jdk VERSION=PATH Add/override a JDK; repeat it for multiple JDKs (version may be 21 or 21.0.1)
   --no-debugger      Omit Vimspector and coc-java-debug
-  VIM_AI_WITH        Select copilot, codex, or claude in the project .env (default: copilot)
+  VIM_AI_WITH        Select auto, fm, copilot, codex, or claude in the project .env
   --help             Show this help
 
 Requires classic Vim 9.0.0438+ with +job, +channel, +terminal, and +timers, Node.js 22.15.0+,

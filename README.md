@@ -31,7 +31,7 @@ Vim has a Python 3 host.
 - Perl::LanguageServer is supported as a diagnostics/navigation fallback, but
   it does not provide completion.
 - Node.js 22.15.0 or newer, Git, and `curl` or `wget`.
-- An installed and authenticated AI CLI: Copilot CLI by default, or Codex CLI or Claude Code as selected with `VIM_AI_WITH` in the project `.env`.
+- An AI CLI: Apple `fm` is selected by default on Macs with an available system model; otherwise use an installed and authenticated Copilot, Codex, or Claude CLI.
 - Maven on `PATH`, or a Maven wrapper in each project, for Java test commands.
 - A local JDK for building and testing. The installer detects `$JAVA_HOME` and
   SDKMAN candidates; pass `--jdk VERSION=PATH` for other installations.
@@ -115,14 +115,18 @@ Space is the leader key.
 
 ## AI assistant
 
-The installer uses `VIM_AI_WITH` from `CODE/.env` to select the AI CLI. Choose
-one value (`copilot`, `codex`, or `claude`); if the variable is absent, the
-Copilot CLI is selected. A `VIM_AI_WITH` environment variable overrides the
-`.env` value. The selected CLI must already be installed and authenticated.
+The installer uses `VIM_AI_WITH` from `CODE/.env` to select the AI CLI. The
+shipped value, `auto`, chooses Apple's `fm` on macOS when `fm available` reports
+the system model ready, and Copilot elsewhere. You can explicitly choose `fm`,
+`copilot`, `codex`, or `claude`; an environment variable overrides `.env`.
+Apple's `fm` is built into macOS 27 and requires an available Apple Intelligence
+model and accepted CLI terms. Other CLIs must already be installed and authenticated.
 For example:
 
 ```sh
-VIM_AI_WITH=copilot
+VIM_AI_WITH=auto
+# or: VIM_AI_WITH=fm
+# or: VIM_AI_WITH=copilot
 # or: VIM_AI_WITH=codex
 # or: VIM_AI_WITH=claude
 ```
@@ -137,11 +141,15 @@ Tab completion remains the fallback), or `<C-y>` to accept it directly. Use
 `:AIComplete` from Normal mode.
 `:AIGenerate instruction` asks the selected CLI to replace
 the current line; run it over a Visual selection to replace those lines.
-`:AIAssistant [prompt]` opens the selected interactive CLI in a Vim terminal at
-the current file's directory.
+`:AIAssistant` opens the selected interactive CLI in a Vim terminal at the
+current file's directory. An optional prompt starts the other assistants and
+asks `fm` for a one-shot response.
 
 Completion prompts include the full in-memory current buffer, the cursor
 position, and up to three small open project buffers, including unsaved edits.
+For `fm`, the prompt uses a bounded excerpt around the cursor to fit the
+on-device model's context window. `fm respond --no-stream` supplies completions.
+`:AIAssistant` opens `fm chat`; `:AIAssistant prompt` shows a one-shot response.
 Buffers outside Vim's working directory are excluded. The selected CLI runs
 from Vim's current working directory. Copilot write and shell tools are
 disabled; Codex uses its read-only sandbox and Claude uses plan mode. Generation

@@ -30,9 +30,23 @@ sub ai_provider {
     $value = 'copilot' unless defined $value && length $value;
     $value = lc $value;
     $value =~ s/^\s+|\s+$//g;
-    $value =~ /\A(?:copilot|codex|claude)\z/
-      or die "Invalid VIM_AI_WITH '$value'; choose copilot, codex, or claude.\n";
+    $value =~ /\A(?:copilot|codex|claude|fm|auto)\z/
+      or die "Invalid VIM_AI_WITH '$value'; choose copilot, codex, or claude, or use fm or auto.\n";
+    if ($value eq 'auto') {
+        return $^O eq 'darwin' && _fm_available($env) ? 'fm' : 'copilot';
+    }
     return $value;
+}
+
+sub _fm_available {
+    my ($env) = @_;
+    my $fm = '/usr/bin/fm';
+    return 0 unless -x $fm;
+    my $path = $env->{PATH} // $ENV{PATH} // '';
+    return 0 unless grep { $_ eq '/usr/bin' } split /:/, $path;
+    open my $fh, '-|', $fm, 'available' or return 0;
+    my $output = do { local $/; <$fh> // '' };
+    return close($fh) && $output =~ /^System model available\s*$/m;
 }
 
 1;
