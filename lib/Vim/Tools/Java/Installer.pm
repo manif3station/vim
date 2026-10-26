@@ -152,6 +152,9 @@ VIM
     $conf .= "let g:coc_config_home = expand('$home/coc')\n";
     $conf .= "let g:coc_data_home = expand('$home/coc-data')\n";
     $conf .= "let g:coc_user_config = extend(get(g:, 'coc_user_config', {}), json_decode('$json'))\n";
+    if (($args{ai_provider} // 'copilot') eq 'fm') {
+        $conf .= "let g:coc_user_config['suggest.autoTrigger'] = 'none'\n";
+    }
     my $perlnavigator_path = File::Spec->catfile($home, 'tools', 'perlnavigator', 'node_modules', '.bin', 'perlnavigator');
     $perlnavigator_path =~ s/'/''/g;
     $conf .= "let g:vim_tools_perlnavigator_local = '$perlnavigator_path'\n";
@@ -195,7 +198,8 @@ endif
 unlet g:vim_tools_perllanguageserver_available
 unlet g:vim_tools_perlnavigator_local
 VIM
-    $conf .= "let g:ale_completion_enabled = 1\nlet g:ale_completion_autoimport = 1\n";
+    $conf .= 'let g:ale_completion_enabled = ' . (($args{ai_provider} // 'copilot') eq 'fm' ? 0 : 1)
+      . "\nlet g:ale_completion_autoimport = 1\n";
     $conf .= "if !exists('g:plugs')\n  call plug#begin(expand('$home/plugged'))\nendif\n";
     $conf .= <<'VIM';
 Plug 'dense-analysis/ale'

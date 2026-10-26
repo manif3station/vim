@@ -131,7 +131,7 @@ VIM_AI_WITH=auto
 # or: VIM_AI_WITH=claude
 ```
 
-After a 1.2 second pause while typing in a filetype buffer, Vim requests an
+After a 1.2 second pause while typing in a normal buffer, Vim requests an
 automatic completion. If you keep typing while a request is running, Vim asks
 again at the latest cursor position when that request finishes. Suggestions
 appear inline as Vim text properties on supported Vim versions; older versions
@@ -150,6 +150,9 @@ position, and up to three small open project buffers, including unsaved edits.
 For `fm`, the prompt uses a bounded excerpt around the cursor to fit the
 on-device model's context window. `fm respond --no-stream` supplies completions.
 `:AIAssistant` opens `fm chat`; `:AIAssistant prompt` shows a one-shot response.
+The `fm` provider also works in unnamed buffers and turns off automatic Coc and
+ALE word-list popups, leaving the grey inline AI suggestion visible. The local
+model may need several seconds after the typing pause to produce a suggestion.
 Buffers outside Vim's working directory are excluded. The selected CLI runs
 from Vim's current working directory. Copilot write and shell tools are
 disabled; Codex uses its read-only sandbox and Claude uses plan mode. Generation

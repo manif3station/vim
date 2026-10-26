@@ -38,7 +38,7 @@ function! s:ClearGhost() abort
 endfunction
 
 function! s:ScheduleCompletion() abort
-  if !exists('*timer_start') || &buftype !=# '' || empty(&filetype)
+  if !exists('*timer_start') || &buftype !=# ''
     return
   endif
   if s:auto_timer != -1
@@ -131,6 +131,35 @@ function! s:CleanResponse(text) abort
   return l:text
 endfunction
 
+function! s:CleanFMCompletion(text) abort
+  let l:text = substitute(a:text, "\r", '', 'g')
+  if l:text =~# '^\s*```'
+    let l:text = substitute(l:text, '^\s*```[^\n]*\n', '', '')
+    let l:text = substitute(l:text, '\n```\s*$', '', '')
+  endif
+  return substitute(l:text, '\n\+$', '', '')
+endfunction
+
+function! s:StripRepeatedPrefix(response, prefix) abort
+  let l:best = 0
+  for l:prefix in [a:prefix, substitute(a:prefix, '^\s*', '', '')]
+    let l:maximum = min([strlen(l:prefix), strlen(a:response)])
+    if l:maximum < 3
+      continue
+    endif
+    for l:length in reverse(range(3, l:maximum))
+      if l:length <= l:best
+        break
+      endif
+      if strpart(l:prefix, strlen(l:prefix) - l:length) ==# strpart(a:response, 0, l:length)
+        let l:best = l:length
+        break
+      endif
+    endfor
+  endfor
+  return strpart(a:response, l:best)
+endfunction
+
 function! s:AIExit(job, status) abort
   if s:provider ==# 'codex' && !empty(get(s:request, 'output_path', ''))
     if filereadable(s:request.output_path)
@@ -138,15 +167,12 @@ function! s:AIExit(job, status) abort
     endif
     call delete(s:request.output_path)
   endif
-  let l:response = s:CleanResponse(s:request.output)
-  if s:provider ==# 'fm' && index(['complete', 'auto_complete'], get(s:request, 'kind', '')) >= 0
-    let l:prefix = get(s:request, 'prefix', '')
-    if stridx(l:response, l:prefix) != 0
-      let l:prefix = substitute(l:prefix, '^\s*', '', '')
-    endif
-    if !empty(l:prefix) && stridx(l:response, l:prefix) == 0
-      let l:response = strpart(l:response, strlen(l:prefix))
-    endif
+  let l:fm_completion = s:provider ==# 'fm'
+        \ && index(['complete', 'auto_complete'], get(s:request, 'kind', '')) >= 0
+  let l:response = l:fm_completion
+        \ ? s:CleanFMCompletion(s:request.output) : s:CleanResponse(s:request.output)
+  if l:fm_completion
+    let l:response = s:StripRepeatedPrefix(l:response, get(s:request, 'prefix', ''))
   endif
   if a:status != 0 || empty(l:response)
     let l:message = empty(s:request.error)
@@ -158,7 +184,7 @@ function! s:AIExit(job, status) abort
     let s:job = 0
     if s:auto_rerun
       let s:auto_rerun = 0
-      if mode() =~# '^i' && &buftype ==# '' && !empty(&filetype)
+      if mode() =~# '^i' && &buftype ==# ''
         let s:auto_timer = timer_start(400, function('s:AutoComplete'))
       endif
     endif
@@ -199,7 +225,7 @@ function! s:AIExit(job, status) abort
   let s:job = 0
   if s:auto_rerun
     let s:auto_rerun = 0
-    if mode() =~# '^i' && &buftype ==# '' && !empty(&filetype)
+    if mode() =~# '^i' && &buftype ==# ''
       let s:auto_timer = timer_start(400, function('s:AutoComplete'))
     endif
   endif
@@ -328,8 +354,10 @@ function! s:StartCompletion(kind) abort
     echoerr 'AI completion requires Vim +job and +channel.'
     return
   endif
-  let l:prompt = 'Complete the code at the cursor using only the supplied in-memory context. Do not call tools, run commands, or modify files. Keep the completion concise and syntactically consistent.'
-        \ . "\n\n" . s:CompletionContext()
+  let l:instruction = s:provider ==# 'fm'
+        \ ? 'Predict the next code the user intends to type at <<<CURSOR>>>. Return only the missing continuation. If a function or block has started, include its body and closing delimiter with proper newlines and indentation. Suggest up to eight lines. Do not repeat existing code.'
+        \ : 'Complete the code at the cursor using only the supplied in-memory context. Do not call tools, run commands, or modify files. Keep the completion concise and syntactically consistent.'
+  let l:prompt = l:instruction . "\n\n" . s:CompletionContext()
   call s:Start(l:prompt, a:kind)
 endfunction
 
