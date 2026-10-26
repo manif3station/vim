@@ -150,7 +150,9 @@ position, and up to three small open project buffers, including unsaved edits.
 For `fm`, the prompt includes the previous 10 lines, the incomplete line, and
 the next 10 lines, bounded to fit the on-device model's context window. The
 next lines are context only; unrelated or incomplete guesses are hidden.
-`fm respond --no-stream` supplies completions.
+For `fm`, Vim starts one localhost `fm serve` process per Vim session and reuses
+its API for completions. Vim stops that process on exit. Continuous typing
+resets the 1.2 second timer, and at most one completion request runs at a time.
 `:AIAssistant` opens `fm chat`; `:AIAssistant prompt` shows a one-shot response.
 The `fm` provider also works in unnamed buffers and turns off automatic Coc and
 ALE word-list popups, leaving the grey inline AI suggestion visible. The local

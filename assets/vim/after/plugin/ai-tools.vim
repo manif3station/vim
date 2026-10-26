@@ -11,6 +11,8 @@ if empty(s:cli)
 endif
 let s:request = {}
 let s:job = 0
+let s:fm_server = 0
+let s:fm_port = 30000 + getpid() % 20000
 let s:ghost = ''
 let s:auto_timer = -1
 let s:auto_rerun = 0
@@ -20,6 +22,30 @@ highlight default link VimToolsAICompletion Comment
 
 function! s:JobRunning() abort
   return type(s:job) == v:t_job && job_status(s:job) ==# 'run'
+endfunction
+
+function! s:FMServerRunning() abort
+  return type(s:fm_server) == v:t_job && job_status(s:fm_server) ==# 'run'
+endfunction
+
+function! s:StartFMServer() abort
+  if s:provider !=# 'fm' || !executable(s:cli)
+    return 0
+  endif
+  if s:FMServerRunning()
+    return 1
+  endif
+  let s:fm_server = job_start([s:cli, 'serve', '--host', '127.0.0.1',
+        \ '--port', string(s:fm_port)],
+        \ {'in_io': 'null', 'out_io': 'null', 'err_io': 'null', 'stoponexit': 'term'})
+  return s:FMServerRunning()
+endfunction
+
+function! s:StopFMServer() abort
+  if s:FMServerRunning()
+    call job_stop(s:fm_server, 'term')
+  endif
+  let s:fm_server = 0
 endfunction
 
 function! s:StopAutoTimer() abort
@@ -231,6 +257,15 @@ function! s:AIExit(job, status) abort
     endif
     call delete(s:request.output_path)
   endif
+  if get(s:request, 'via_server', 0) && a:status == 0
+    try
+      let l:reply = json_decode(s:request.output)
+      let s:request.output = l:reply.choices[0].message.content
+    catch
+      let s:request.output = ''
+      let s:request.error = 'fm serve returned an invalid response.'
+    endtry
+  endif
   let l:fm_completion = s:provider ==# 'fm'
         \ && index(['complete', 'auto_complete'], get(s:request, 'kind', '')) >= 0
   let l:response = l:fm_completion
@@ -333,6 +368,14 @@ function! s:Start(prompt, kind) abort
     let s:request.output_path = tempname()
     call writefile([], s:request.output_path)
     let l:argv = s:AICommand(a:prompt, s:request.output_path)
+  elseif s:provider ==# 'fm' && s:StartFMServer() && executable('curl')
+    let s:request.via_server = 1
+    let l:argv = ['curl', '--silent', '--show-error', '--fail', '--noproxy', '*',
+          \ '--retry', '20', '--retry-connrefused', '--retry-delay', '1',
+          \ '--retry-max-time', '30', '--max-time', '60',
+          \ '-H', 'Content-Type: application/json', '--data-binary', '@-',
+          \ '--write-out', '\n',
+          \ 'http://127.0.0.1:' . s:fm_port . '/v1/chat/completions']
   else
     let l:argv = s:AICommand(a:prompt, '')
   endif
@@ -341,6 +384,10 @@ function! s:Start(prompt, kind) abort
         \ 'exit_cb': function('s:AIExit'), 'out_mode': 'nl', 'err_mode': 'nl',
         \ 'cwd': getcwd()
         \ }
+  if get(s:request, 'via_server', 0)
+    let l:options.in_io = 'pipe'
+    let l:options.in_mode = 'raw'
+  endif
   let s:job = job_start(l:argv, l:options)
   if job_status(s:job) !=# 'run'
     if !empty(get(s:request, 'output_path', ''))
@@ -349,6 +396,15 @@ function! s:Start(prompt, kind) abort
     let s:job = 0
     echoerr 'Could not start ' . s:provider . ' CLI.'
     return
+  endif
+  if get(s:request, 'via_server', 0)
+    let l:payload = {'model': 'system', 'stream': v:false,
+          \ 'messages': [
+          \   {'role': 'system', 'content': 'Return only the requested code or insertion text. At <<<CURSOR>>>, output only the missing text, never the existing line prefix. Do not include explanations or markdown fences.'},
+          \   {'role': 'user', 'content': a:prompt}
+          \ ]}
+    call ch_sendraw(s:job, json_encode(l:payload))
+    call ch_close_in(s:job)
   endif
   echom 'AI completion requested from ' . s:provider . '.'
 endfunction
@@ -629,4 +685,6 @@ augroup vim_tools_ai_completion
   autocmd InsertLeave,BufLeave * call <SID>StopAutoTimer() | call <SID>ClearGhost()
   " Providers such as Codeium remap Tab from their VimEnter handler.
   autocmd VimEnter * call <SID>MapTab()
+  autocmd VimEnter * call <SID>StartFMServer()
+  autocmd VimLeavePre * call <SID>StopFMServer()
 augroup END
