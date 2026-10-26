@@ -4,7 +4,8 @@ endif
 let g:loaded_vim_tools_ai_tools = 1
 
 let s:provider = get(g:, 'vim_tools_ai_provider', 'copilot')
-let s:cli = exepath(s:provider)
+let s:cli = s:provider ==# 'fm' && has('macunix') && executable('/usr/bin/fm')
+      \ ? '/usr/bin/fm' : exepath(s:provider)
 if empty(s:cli)
   let s:cli = s:provider
 endif

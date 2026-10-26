@@ -45,7 +45,9 @@ sub run {
         home => $self->{home}, java_home => $self->{env}{JAVA_HOME}, path => $self->{env}{PATH}, windows => $self->{windows},
     );
     my $ai_provider = ai_provider(root => $self->{root}, env => $self->{env});
-    my $ai_cli = _find_executable($self->{windows} ? "$ai_provider.exe" : $ai_provider, $self->{env}{PATH});
+    my $ai_cli = $ai_provider eq 'fm' && $^O eq 'darwin' && -x '/usr/bin/fm'
+      ? '/usr/bin/fm'
+      : _find_executable($self->{windows} ? "$ai_provider.exe" : $ai_provider, $self->{env}{PATH});
     for my $spec (@{ $opts{jdk} || [] }) {
         $spec =~ /^([0-9]+(?:\.[0-9]+)*)(?:=|:)(.+)$/ or die "Invalid --jdk '$spec'; use --jdk VERSION=PATH.\n";
         my ($major, $path) = (major_version($1), $2);
